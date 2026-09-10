@@ -53,8 +53,20 @@ export default function SettingsPanel({
   };
 
   const approve = async (req) => {
-    await grantAccess(uid, req.fromUid, req.fromName);
-    await respondAccess(req.id, 'approved');
+    try {
+      await grantAccess(uid, req.fromUid, req.fromName);
+    } catch (err) {
+      setMsg({ t: 'warn', s: `Помилка надання доступу: ${err.message}` });
+      console.error('grantAccess failed:', err);
+      return;
+    }
+    try {
+      await respondAccess(req.id, 'approved');
+    } catch (err) {
+      setMsg({ t: 'warn', s: `Доступ надано, але не вдалось оновити запит: ${err.message}` });
+      console.error('respondAccess failed:', err);
+      return;
+    }
     setMsg({
       t: 'ok',
       s: `Доступ надано ${req.fromName || 'користувачу'}. Якщо доступ взаємний — ваші родоводи щойно об'єдналися в один спільний, редагувати можуть обидва.`,
