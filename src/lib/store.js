@@ -268,6 +268,45 @@ export async function mergeSpaces(uidA, uidB) {
   await Promise.all(updates);
 }
 
+// Список користувачів (uid), з якими я зараз у спільному просторі редагування —
+// обчислюється з моїх власних людей (унікальні spaceMembers мінус я сам).
+export function getSpaceCoMembers(myUid, myPeople) {
+  const set = new Set();
+  Object.values(myPeople).forEach((p) => {
+    (p.spaceMembers || []).forEach((m) => { if (m !== myUid) set.add(m); });
+  });
+  return Array.from(set);
+}
+// Кожен документ повертається до spaceMembers = [його власний ownerId] — тобто дерево
+// знову розпадається на "моє" (те, що я створив) і "її" (те, що вона створила),
+// як було до обʼєднання. Дані нікуди не зникають, просто розходяться права редагування.
+export async function leaveSharedSpace(myUid, otherUid) {
+  const [mySnap, otherSnap] = await Promise.all([
+    getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', myUid))),
+    getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', otherUid))),
+  ]);
+  const touched = new Map();
+  const collect = (snap) => snap.forEach((d) => touched.set(d.id, d));
+  collect(mySnap);
+  collect(otherSnap);
+
+  const updates = [];
+  touched.forEach((d) => {
+    const data = d.data();
+    // Документ повертається лише до свого творця — інший учасник втрачає доступ до нього.
+    updates.push(updateDoc(d.ref, { spaceMembers: [data.ownerId] }));
+  });
+  await Promise.all(updates);
+
+  // Прибираємо grants в обидва боки, щоб не спрацювало повторне автозлиття
+  const g1 = doc(db, 'grants', `${myUid}_${otherUid}`);
+  const g2 = doc(db, 'grants', `${otherUid}_${myUid}`);
+  await Promise.all([
+    deleteDoc(g1).catch(() => {}),
+    deleteDoc(g2).catch(() => {}),
+  ]);
+}
+
 export async function revokeGrant(grantId) {
   await deleteDoc(doc(db, 'grants', grantId));
 }

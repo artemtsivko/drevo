@@ -1,16 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   updateUserSettings, findUserByEmail, requestAccess,
-  respondAccess, grantAccess, revokeGrant,
+  respondAccess, grantAccess, revokeGrant, getSpaceCoMembers,
+  leaveSharedSpace, getUserProfile,
 } from '../lib/store.js';
 
 export default function SettingsPanel({
-  profile, uid, incomingAccess, grants, myAccess,
+  profile, uid, incomingAccess, grants, myAccess, myPeople,
 }) {
   const [isPublic, setIsPublic] = useState(profile.isPublic);
   const [autoMatch, setAutoMatch] = useState(profile.autoMatchEnabled !== false);
   const [email, setEmail] = useState('');
   const [msg, setMsg] = useState(null);
+  const [coMembers, setCoMembers] = useState([]); // [{uid, displayName}]
+
+  useEffect(() => {
+    const ids = getSpaceCoMembers(uid, myPeople || {});
+    if (ids.length === 0) { setCoMembers([]); return; }
+    Promise.all(ids.map((id) => getUserProfile(id))).then((profiles) => {
+      setCoMembers(profiles.filter(Boolean));
+    });
+  }, [uid, myPeople]);
+
+  const leaveSpace = async (otherUid, otherName) => {
+    if (!confirm(`Розірвати спільний родовід з ${otherName || 'цим користувачем'}? Кожен отримає назад лише те, що сам додав.`)) return;
+    await leaveSharedSpace(uid, otherUid);
+    setMsg({ t: 'ok', s: `Спільний родовід з ${otherName || 'користувачем'} розірвано.` });
+  };
 
   const savePrivacy = async (val) => {
     setIsPublic(val);
@@ -87,6 +103,27 @@ export default function SettingsPanel({
           <button className="btn" onClick={askAccess} disabled={!email.trim()}>Надіслати запит</button>
         </div>
         {msg && <div className={`notice ${msg.t === 'warn' ? 'notice-warn' : ''}`}>{msg.s}</div>}
+      </div>
+
+      <div className="card stack">
+        <div>
+          <h2 className="section-title">Спільний родовід</h2>
+          <p className="section-sub" style={{ margin: 0 }}>
+            Люди, з якими у вас взаємний доступ — родовід ведеться разом, редагувати можуть обидва.
+          </p>
+        </div>
+        {coMembers.length === 0
+          ? <p className="section-sub" style={{ margin: 0 }}>Ви поки ні з ким не ведете спільний родовід.</p>
+          : coMembers.map((c) => (
+            <div key={c.uid} className="person">
+              {c.photoURL && <div className="avatar"><img src={c.photoURL} alt="" /></div>}
+              <div style={{ flex: 1 }}>
+                <div className="person-name">{c.displayName || c.email}</div>
+                <div className="person-meta">спільне редагування родоводу</div>
+              </div>
+              <button className="btn btn-danger btn-sm" onClick={() => leaveSpace(c.uid, c.displayName)}>Розірвати</button>
+            </div>
+          ))}
       </div>
 
       <div className="card stack">

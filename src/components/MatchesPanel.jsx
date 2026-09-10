@@ -56,7 +56,11 @@ export default function MatchesPanel({ uid, profile, myPeople, proposals }) {
     for (const u of allUsers) {
       if (u.uid === uid) continue;
       const theirPeople = await getPeopleOnce(u.uid);
-      const ms = findMatches(myPeople, theirPeople);
+      // Виключаємо документи, що вже спільні (той самий id вже є в моєму дереві через spaceMembers)
+      const theirPeopleFiltered = {};
+      Object.values(theirPeople).forEach((p) => { if (!myPeople[p.id]) theirPeopleFiltered[p.id] = p; });
+      if (Object.keys(theirPeopleFiltered).length === 0) continue;
+      const ms = findMatches(myPeople, theirPeopleFiltered);
       ms.forEach((m) => found.push({ ...m, owner: u }));
     }
     found.sort((a, b) => b.score - a.score);

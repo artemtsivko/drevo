@@ -4,11 +4,10 @@ import { auth, googleProvider } from './firebase.js';
 import {
   ensureUserProfile, watchPeople, addPerson, updatePerson, deletePerson,
   linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
-  watchProposals, saveOnboarding, getAccessibleTrees, getPeopleOnce,
+  watchProposals, saveOnboarding, getPeopleOnce,
   watchMyAcceptedProposalsToComplete, completeInitiatorSide, migrateLegacyPeople,
 } from './lib/store.js';
 import { tryAutoAdopt } from './lib/autoAdopt.js';
-import { buildMergedTree } from './lib/mergeTree.js';
 import { runAutoScan } from './lib/autoScan.js';
 
 import PersonModal from './components/PersonModal.jsx';
@@ -59,7 +58,6 @@ export default function App() {
   const [proposals, setProposals] = useState([]);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [skipOnboarding, setSkipOnboarding] = useState(false);
-  const [mergedPeople, setMergedPeople] = useState(null); // null = ще не завантажено, показуємо власне дерево
 
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u || null);
@@ -102,20 +100,6 @@ export default function App() {
     })();
     return () => { cancelled = true; unsubs.forEach((f) => f && f()); };
   }, [user]);
-
-  // Перебудовуємо об'єднаний родовід (моє дерево + дерева тих, кому дав/хто дав доступ)
-  // при кожній зміні власних даних або списку доступів.
-  useEffect(() => {
-    if (!user || !peopleLoaded) return;
-    let cancelled = false;
-    (async () => {
-      const trees = await getAccessibleTrees(user.uid);
-      if (cancelled) return;
-      const { people: merged } = buildMergedTree(trees);
-      setMergedPeople(merged);
-    })();
-    return () => { cancelled = true; };
-  }, [user, people, grants, myAccess, peopleLoaded]);
 
   // Автоматичний фоновий пошук збігів: при вході і кожні 5 хвилин.
   useEffect(() => {
@@ -164,23 +148,19 @@ export default function App() {
     );
   }
 
-  // Для перегляду показуємо об'єднане дерево (моє + доступні мені), поки воно не готове — власне.
-  const displayPeople = mergedPeople || people;
+  // people вже містить усіх спільних людей (через spaceMembers) — це і є повне дерево,
+  // живе й редаговане обома сторонами. Окремий "обʼєднаний перегляд" більше не потрібен.
+  const displayPeople = people;
+  // "Спільний" маркер лишається для linkedTo — людей, підтверджених як "одна й та ж особа"
+  // між РІЗНИМИ (не обʼєднаними в простір) деревами.
   const sharedIds = new Set(
-    Object.values(displayPeople).filter((p) => p.isMerged).map((p) => p.id)
+    Object.values(displayPeople).filter((p) => (p.linkedTo || []).length > 0).map((p) => p.id)
   );
 
   const openNew = () => { setEditing(null); setPrefill(null); setShowModal(true); };
 
-  // Якщо документ уже в моєму просторі (spaceMembers включає мене) — це один і той же
-  // запис, який можна редагувати напряму. isMerged (linkedTo) — інший механізм: дві окремі
-  // персони, підтверджені як "одна людина", але без спільного права редагування.
-  const resolveMine = (mergedPerson) => {
-    if (people[mergedPerson.id]) return people[mergedPerson.id];
-    if (!mergedPerson.isMerged) return null;
-    const mySource = (mergedPerson.sources || []).find((s) => people[s.personId]);
-    return mySource ? people[mySource.personId] : null;
-  };
+  // displayPeople === people, тож будь-яка картка, яку видно, вже редагована напряму.
+  const resolveMine = (p) => people[p.id] || null;
 
   const openPerson = (p) => {
     const mine = resolveMine(p);
@@ -324,6 +304,7 @@ export default function App() {
           <SettingsPanel
             profile={profile} uid={user.uid}
             incomingAccess={incomingAccess} grants={grants} myAccess={myAccess}
+            myPeople={people}
           />
         )}
       </main>

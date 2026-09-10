@@ -18,7 +18,15 @@ export async function runAutoScan(uid, profile, myPeople, grantedOwnerIds) {
 
   for (const owner of candidateOwners.values()) {
     const theirPeople = await getPeopleOnce(owner.uid);
-    const ms = findMatches(myPeople, theirPeople);
+    // Якщо простори вже обʼєднані (spaceMembers), одні й ті самі документи потраплять
+    // в обидва списки — це не "збіг", а буквально той самий запис. Виключаємо їх.
+    const theirPeopleFiltered = {};
+    Object.values(theirPeople).forEach((p) => {
+      if (!myPeople[p.id]) theirPeopleFiltered[p.id] = p;
+    });
+    if (Object.keys(theirPeopleFiltered).length === 0) continue;
+
+    const ms = findMatches(myPeople, theirPeopleFiltered);
     checked += ms.length;
     for (const m of ms) {
       // якщо вже пов'язані (linkedTo) — пропускаємо
