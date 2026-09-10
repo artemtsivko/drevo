@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Профілі: кожен читає публічні, редагує лише свій
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Люди: власник має повний доступ; інші можуть читати,
+    // якщо родовід власника публічний або їм надано доступ (grant).
+    match /people/{personId} {
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+      allow read: if request.auth != null && (
+        resource.data.ownerId == request.auth.uid
+        || isOwnerPublic(resource.data.ownerId)
+        || hasGrant(resource.data.ownerId, request.auth.uid)
+      );
+    }
+
+    // Запити доступу
+    match /accessRequests/{id} {
+      allow create: if request.auth != null
+        && request.resource.data.fromUid == request.auth.uid;
+      allow read, update: if request.auth != null && (
+        resource.data.fromUid == request.auth.uid
+        || resource.data.toUid == request.auth.uid
+      );
+    }
+
+    // Надані доступи
+    match /grants/{id} {
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+      allow read: if request.auth != null && (
+        resource.data.ownerId == request.auth.uid
+        || resource.data.granteeUid == request.auth.uid
+      );
+      allow delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    // Пропозиції об'єднання
+    match /mergeProposals/{id} {
+      allow create: if request.auth != null
+        && request.resource.data.initiatorUid == request.auth.uid;
+      allow read, update: if request.auth != null && (
+        resource.data.initiatorUid == request.auth.uid
+        || resource.data.respondentUid == request.auth.uid
+      );
+    }
+
+    function isOwnerPublic(ownerId) {
+      return get(/databases/$(database)/documents/users/$(ownerId)).data.isPublic == true;
+    }
+    function hasGrant(ownerId, uid) {
+      return exists(/databases/$(database)/documents/grants/$(ownerId + '_' + uid));
+    }
+  }
+}
