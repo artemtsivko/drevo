@@ -24,8 +24,12 @@ export default function SettingsPanel({
 
   const leaveSpace = async (otherUid, otherName) => {
     if (!confirm(`Розірвати спільний родовід з ${otherName || 'цим користувачем'}? Кожен отримає назад лише те, що сам додав.`)) return;
-    await leaveSharedSpace(uid, otherUid);
-    setMsg({ t: 'ok', s: `Спільний родовід з ${otherName || 'користувачем'} розірвано.` });
+    try {
+      await leaveSharedSpace(uid, otherUid);
+      setMsg({ t: 'ok', s: `Спільний родовід з ${otherName || 'користувачем'} розірвано.` });
+    } catch (err) {
+      setMsg({ t: 'warn', s: `Не вдалось розірвати: ${err.message}` });
+    }
   };
 
   const savePrivacy = async (val) => {

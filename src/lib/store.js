@@ -231,41 +231,69 @@ export async function grantAccess(ownerId, granteeUid, granteeName) {
   });
 
   // Перевіряємо, чи це взаємний доступ (зустрічний grant granteeUid -> ownerId вже існує).
-  // Якщо так — це і є момент "двоє в парі": зливаємо простори редагування назавжди.
+  // Якщо так — я (ownerId, той, хто щойно натиснув) можу відразу додати другу сторону
+  // у spaceMembers СВОЇХ документів (це дозволено правилами). Друга сторона довиконає
+  // свою частину автоматично при наступному вході (watchPendingMutualMerges).
   const reverseId = `${granteeUid}_${ownerId}`;
   const reverseSnap = await getDoc(doc(db, 'grants', reverseId));
   if (reverseSnap.exists()) {
-    await mergeSpaces(ownerId, granteeUid);
+    await mergeMySide(ownerId, granteeUid);
   }
 }
 
 // Зливає простори редагування двох користувачів: усі їхні існуючі записи людей
 // стають доступними для редагування ОБОМ (spaceMembers розширюється на обидва uid).
 // Викликається лише після підтвердженого взаємного доступу (grant в обидва боки).
-export async function mergeSpaces(uidA, uidB) {
-  const [peopleA, peopleB] = await Promise.all([
-    getPeopleByCreator(uidA),
-    getPeopleByCreator(uidB),
-  ]);
-  // Також враховуємо записи, які вже є в чиємусь розширеному просторі (напр. потрійне злиття)
-  const allDocsSnap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', uidA)));
-  const allDocsSnapB = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', uidB)));
-
-  const touched = new Map(); // id -> {ref, currentMembers}
-  const collect = (snap) => snap.forEach((d) => touched.set(d.id, { ref: d.ref, members: d.data().spaceMembers || [] }));
-  collect(allDocsSnap);
-  collect(allDocsSnapB);
-  Object.values(peopleA).forEach((p) => { if (!touched.has(p.id)) touched.set(p.id, { ref: doc(db, 'people', p.id), members: p.spaceMembers || [] }); });
-  Object.values(peopleB).forEach((p) => { if (!touched.has(p.id)) touched.set(p.id, { ref: doc(db, 'people', p.id), members: p.spaceMembers || [] }); });
-
-  // Обʼєднаний простір = всі uid, що вже фігурують хоч в одному з документів, + uidA/uidB
-  const unifiedSpace = new Set([uidA, uidB]);
-  touched.forEach(({ members }) => members.forEach((m) => unifiedSpace.add(m)));
-  const finalSpace = Array.from(unifiedSpace);
-
+// Обʼєднання просторів — ДВОФАЗНЕ, бо кожен може редагувати лише СВОЇ документи
+// (правила безпеки). Коли доступ стає взаємним, кожна сторона (при вході в застосунок)
+// додає іншого в spaceMembers СВОЇХ ЖЕ записів. Коли обидва це зробили — усі документи
+// з обох боків мають одне одного в spaceMembers, і дерево справді спільне.
+// mergeMySide викликається для АВТЕНТИФІКОВАНОГО користувача uid, додає otherUid
+// у spaceMembers усіх документів, де uid є ownerId (або вже учасником).
+export async function mergeMySide(uid, otherUid) {
+  const snap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', uid)));
   const updates = [];
-  touched.forEach(({ ref }) => { updates.push(updateDoc(ref, { spaceMembers: finalSpace })); });
+  snap.forEach((d) => {
+    const data = d.data();
+    const members = data.spaceMembers || [];
+    if (members.includes(otherUid)) return; // вже додано
+    updates.push(updateDoc(d.ref, { spaceMembers: Array.from(new Set([...members, otherUid])) }));
+  });
   await Promise.all(updates);
+}
+
+// Чи є взаємний grant між двома uid (обидва боки дозволили одне одному).
+export async function hasMutualGrant(uidA, uidB) {
+  const [a, b] = await Promise.all([
+    getDoc(doc(db, 'grants', `${uidA}_${uidB}`)),
+    getDoc(doc(db, 'grants', `${uidB}_${uidA}`)),
+  ]);
+  return a.exists() && b.exists();
+}
+
+// Список usersUid, з якими в мене взаємний grant, але моя сторона злиття ще не виконана
+// (є хоч один мій документ без otherUid у spaceMembers) — використовується, щоб при вході
+// довиконати свою частину mergeMySide автоматично.
+export async function getPendingMutualMerges(uid) {
+  const grantsToMe = await getDocs(query(collection(db, 'grants'), where('granteeUid', '==', uid)));
+  const grantsFromMe = await getDocs(query(collection(db, 'grants'), where('ownerId', '==', uid)));
+  const toMeOwners = new Set();
+  grantsToMe.forEach((d) => toMeOwners.add(d.data().ownerId));
+  const fromMeGrantees = new Set();
+  grantsFromMe.forEach((d) => fromMeGrantees.add(d.data().granteeUid));
+  const mutual = [...toMeOwners].filter((o) => fromMeGrantees.has(o));
+  return mutual;
+}
+
+// При вході: перевіряє всі взаємні гранти і довиконує МОЮ частину злиття для кожного
+// (додає otherUid у spaceMembers моїх документів, якщо ще не додано). Безпечно викликати
+// повторно — mergeMySide сам пропускає вже оновлені документи.
+export async function completePendingMerges(uid) {
+  const mutualUids = await getPendingMutualMerges(uid);
+  for (const otherUid of mutualUids) {
+    await mergeMySide(uid, otherUid);
+  }
+  return mutualUids;
 }
 
 // Список користувачів (uid), з якими я зараз у спільному просторі редагування —
@@ -277,34 +305,32 @@ export function getSpaceCoMembers(myUid, myPeople) {
   });
   return Array.from(set);
 }
-// Кожен документ повертається до spaceMembers = [його власний ownerId] — тобто дерево
-// знову розпадається на "моє" (те, що я створив) і "її" (те, що вона створила),
-// як було до обʼєднання. Дані нікуди не зникають, просто розходяться права редагування.
+
+// Розриває спільний простір між мною (myUid) та іншим користувачем (otherUid), З МОГО БОКУ.
+// За правилами безпеки я можу редагувати лише документи, де Я сам є в spaceMembers —
+// тому чіпаю лише ту частину простору, яку бачу я. Обидві сторони мають натиснути
+// "Розірвати" зі свого акаунту, щоб повністю розділити дерева (симетрично до підтвердження пропозицій).
 export async function leaveSharedSpace(myUid, otherUid) {
-  const [mySnap, otherSnap] = await Promise.all([
-    getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', myUid))),
-    getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', otherUid))),
-  ]);
-  const touched = new Map();
-  const collect = (snap) => snap.forEach((d) => touched.set(d.id, d));
-  collect(mySnap);
-  collect(otherSnap);
+  const mySnap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', myUid)));
 
   const updates = [];
-  touched.forEach((d) => {
+  mySnap.forEach((d) => {
     const data = d.data();
-    // Документ повертається лише до свого творця — інший учасник втрачає доступ до нього.
-    updates.push(updateDoc(d.ref, { spaceMembers: [data.ownerId] }));
+    const members = data.spaceMembers || [];
+    if (!members.includes(otherUid)) return; // не спільний з otherUid — не чіпаємо
+    if (data.ownerId === myUid) {
+      // Мій документ — прибираю otherUid зі spaceMembers, решту учасників лишаю як є.
+      updates.push(updateDoc(d.ref, { spaceMembers: members.filter((m) => m !== otherUid) }));
+    } else {
+      // Чужий документ (я в ньому лише учасник) — виходжу з нього сам.
+      updates.push(updateDoc(d.ref, { spaceMembers: members.filter((m) => m !== myUid) }));
+    }
   });
   await Promise.all(updates);
 
-  // Прибираємо grants в обидва боки, щоб не спрацювало повторне автозлиття
-  const g1 = doc(db, 'grants', `${myUid}_${otherUid}`);
-  const g2 = doc(db, 'grants', `${otherUid}_${myUid}`);
-  await Promise.all([
-    deleteDoc(g1).catch(() => {}),
-    deleteDoc(g2).catch(() => {}),
-  ]);
+  // Прибираю МІЙ бік grant (правила дозволяють видаляти запис, де я ownerId або granteeUid)
+  await deleteDoc(doc(db, 'grants', `${myUid}_${otherUid}`)).catch(() => {});
+  await deleteDoc(doc(db, 'grants', `${otherUid}_${myUid}`)).catch(() => {});
 }
 
 export async function revokeGrant(grantId) {

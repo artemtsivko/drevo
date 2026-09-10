@@ -6,6 +6,7 @@ import {
   linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
   watchProposals, saveOnboarding, getPeopleOnce,
   watchMyAcceptedProposalsToComplete, completeInitiatorSide, migrateLegacyPeople,
+  completePendingMerges,
 } from './lib/store.js';
 import { tryAutoAdopt } from './lib/autoAdopt.js';
 import { runAutoScan } from './lib/autoScan.js';
@@ -89,6 +90,9 @@ export default function App() {
     (async () => {
       // Мігруємо старі записи (без spaceMembers) перед підпискою, інакше вони не потраплять у вибірку
       await migrateLegacyPeople(user.uid).catch(() => {});
+      // Довиконуємо свою частину злиття для всіх взаємних доступів, які ще не завершені
+      // (наприклад, я дав доступ раніше, а вона підтвердила щойно — я довершую при вході)
+      await completePendingMerges(user.uid).catch(() => {});
       if (cancelled) return;
       unsubs = [
         watchPeople(user.uid, (p) => { setPeople(p); setPeopleLoaded(true); }),
@@ -100,6 +104,13 @@ export default function App() {
     })();
     return () => { cancelled = true; unsubs.forEach((f) => f && f()); };
   }, [user]);
+
+  // Коли змінюється список моїх grants — перевіряємо взаємність і довиконуємо свою
+  // частину злиття, якщо зʼявилась (без потреби перезаходити в застосунок).
+  useEffect(() => {
+    if (!user) return;
+    completePendingMerges(user.uid).catch(() => {});
+  }, [user, grants.length, myAccess.length]);
 
   // Автоматичний фоновий пошук збігів: при вході і кожні 5 хвилин.
   useEffect(() => {
