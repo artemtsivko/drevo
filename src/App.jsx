@@ -111,26 +111,35 @@ export default function App() {
   const openNew = () => { setEditing(null); setPrefill(null); setShowModal(true); };
   const openPerson = (p) => { setEditing(p); setPrefill(null); setShowModal(true); };
 
-  // Клік у контекстному меню картки: підготувати нову людину з уже проставленим зв'язком
-  const quickAction = (action, person) => {
-    if (action === 'edit') { openPerson(person); return; }
-    if (action === 'addFather') {
-      setEditing(null);
+  // "Нова людина": відкриваємо форму з уже проставленим зв'язком-префілом
+  const addNewRelated = (relation, person) => {
+    setEditing(null);
+    if (relation === 'father') {
       setPrefill({ gender: 'm', childIds: [person.id] });
-      setShowModal(true);
-    } else if (action === 'addMother') {
-      setEditing(null);
+    } else if (relation === 'mother') {
       setPrefill({ gender: 'f', childIds: [person.id] });
-      setShowModal(true);
-    } else if (action === 'addPartner') {
-      setEditing(null);
+    } else if (relation === 'partner') {
       setPrefill({ spouseIds: [person.id] });
-      setShowModal(true);
-    } else if (action === 'addChild') {
-      setEditing(null);
+    } else if (relation === 'child') {
       const spouse = (person.spouseIds || [])[0];
       setPrefill({ parentIds: spouse ? [person.id, spouse] : [person.id] });
-      setShowModal(true);
+    }
+    setShowModal(true);
+  };
+
+  // "Обрати з наявних": напряму пов'язуємо двох людей, без відкриття форми
+  const linkExisting = async (relation, existingId, person) => {
+    const fresh = people;
+    if (relation === 'father' || relation === 'mother') {
+      await linkParentChild(existingId, person.id, fresh);
+    } else if (relation === 'partner') {
+      const a = fresh[person.id], b = fresh[existingId];
+      await updatePerson(person.id, { spouseIds: Array.from(new Set([...(a.spouseIds || []), existingId])) });
+      await updatePerson(existingId, { spouseIds: Array.from(new Set([...(b.spouseIds || []), person.id])) });
+    } else if (relation === 'child') {
+      const spouse = (person.spouseIds || [])[0];
+      await linkParentChild(person.id, existingId, fresh);
+      if (spouse) await linkParentChild(spouse, existingId, fresh);
     }
   };
 
@@ -210,8 +219,8 @@ export default function App() {
               <span className="person-meta">{Object.keys(people).length} родичів</span>
             </div>
 
-            {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onQuickAction={quickAction} mode="tree" />}
-            {view === 'graph' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onQuickAction={quickAction} mode="graph" />}
+            {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} mode="tree" />}
+            {view === 'graph' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} mode="graph" />}
             {view === 'list' && <ListView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
             {view === 'explorer' && <ExplorerView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
           </div>

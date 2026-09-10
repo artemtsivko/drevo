@@ -121,7 +121,7 @@ function border(p) {
   return '#3f6b4c';
 }
 
-export default function TreeView({ people, sharedIds, onOpen, onQuickAction, mode }) {
+export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkExisting, mode }) {
   const { unitPos, memberUnit, width, height, gen, gens, minGen } = useMemo(() => layout(people), [people]);
   const [zoom, setZoom] = useState(0.85);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -182,8 +182,8 @@ export default function TreeView({ people, sharedIds, onOpen, onQuickAction, mod
     });
   };
 
-  const act = (action) => {
-    if (menu) onQuickAction(action, menu.person);
+  const act = (fn, ...args) => {
+    fn(...args, menu.person);
     setMenu(null);
   };
 
@@ -245,7 +245,7 @@ export default function TreeView({ people, sharedIds, onOpen, onQuickAction, mod
             {slots.map((s, i) => (
               <g key={'slot' + i} transform={`translate(${s.x - SLOT_W / 2},${s.y - 34})`}
                 style={{ cursor: 'pointer' }}
-                onClick={() => onQuickAction('addFather', people[s.personId])}>
+                onClick={() => onAddNew('father', people[s.personId])}>
                 <rect width={SLOT_W} height="34" rx="8" fill="none" stroke="#c7bfa8" strokeWidth="1.5" strokeDasharray="5 4" />
                 <text x={SLOT_W / 2} y="21" textAnchor="middle" fontFamily="Segoe UI, sans-serif" fontSize="12" fill="#9a8f78">
                   + додати батьків
@@ -292,14 +292,12 @@ export default function TreeView({ people, sharedIds, onOpen, onQuickAction, mod
 
       {menu && (
         <PersonQuickMenu
-          x={menu.x} y={menu.y} person={menu.person}
+          x={menu.x} y={menu.y} person={menu.person} people={people}
           hasFather={(menu.person.parentIds || []).some((id) => people[id] && people[id].gender !== 'f')}
           hasMother={(menu.person.parentIds || []).some((id) => people[id] && people[id].gender === 'f')}
-          onEdit={() => act('edit')}
-          onAddFather={() => act('addFather')}
-          onAddMother={() => act('addMother')}
-          onAddPartner={() => act('addPartner')}
-          onAddChild={() => act('addChild')}
+          onEdit={() => act(onOpen)}
+          onAddNew={(relation) => act(onAddNew, relation)}
+          onLinkExisting={(relation, existingId) => act(onLinkExisting, relation, existingId)}
           onClose={() => setMenu(null)}
         />
       )}
