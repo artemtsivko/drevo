@@ -1,4 +1,7 @@
 import React, { useState } from 'react';
+import GenderPicker from './GenderPicker.jsx';
+import PlaceInput from './PlaceInput.jsx';
+import PersonPicker from './PersonPicker.jsx';
 
 const blank = {
   firstName: '', lastName: '', maidenName: '', gender: '',
@@ -10,15 +13,26 @@ const blank = {
 export default function PersonModal({ person, people, onSave, onClose, onDelete, readOnly }) {
   const [form, setForm] = useState({ ...blank, ...(person || {}) });
 
-  const others = Object.values(people).filter((p) => p.id !== form.id);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const toggleRel = (key, id) => {
-    const list = form[key] || [];
-    set(key, list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  const parents = form.parentIds || [];
+  const father = parents.find((id) => people[id] && people[id].gender !== 'f') || parents[0] || null;
+  const mother = parents.find((id) => people[id] && people[id].gender === 'f' && id !== father) || null;
+
+  const setParent = (slot, id) => {
+    let next = [...parents];
+    if (slot === 'father') {
+      next = next.filter((x) => x !== father);
+      if (id) next.push(id);
+    } else {
+      next = next.filter((x) => x !== mother);
+      if (id) next.push(id);
+    }
+    set('parentIds', next.filter(Boolean));
   };
 
-  const parents = form.parentIds || [];
+  const spouseId = (form.spouseIds || [])[0] || null;
+  const setSpouse = (id) => set('spouseIds', id ? [id] : []);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -41,22 +55,20 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
             </div>
           </div>
 
-          <div className="grid-2">
-            <div>
-              <label>Дівоче прізвище</label>
-              <input value={form.maidenName} disabled={readOnly}
-                onChange={(e) => set('maidenName', e.target.value)} />
-            </div>
+          <div>
+            <label>Дівоче прізвище (якщо є)</label>
+            <input value={form.maidenName} disabled={readOnly}
+              onChange={(e) => set('maidenName', e.target.value)} />
+          </div>
+
+          {!readOnly ? (
+            <GenderPicker value={form.gender} onChange={(v) => set('gender', v)} />
+          ) : (
             <div>
               <label>Стать</label>
-              <select value={form.gender} disabled={readOnly}
-                onChange={(e) => set('gender', e.target.value)}>
-                <option value="">—</option>
-                <option value="m">Чоловік</option>
-                <option value="f">Жінка</option>
-              </select>
+              <div>{form.gender === 'm' ? 'Чоловік' : form.gender === 'f' ? 'Жінка' : '—'}</div>
             </div>
-          </div>
+          )}
 
           <div className="grid-2">
             <div>
@@ -73,8 +85,9 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
 
           <div>
             <label>Місце народження</label>
-            <input value={form.birthPlace} disabled={readOnly}
-              onChange={(e) => set('birthPlace', e.target.value)} />
+            {readOnly
+              ? <div>{form.birthPlace || '—'}</div>
+              : <PlaceInput value={form.birthPlace} onChange={(v) => set('birthPlace', v)} placeholder="Почніть вводити місто чи село…" />}
           </div>
 
           <div className="grid-2">
@@ -85,8 +98,9 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
             </div>
             <div>
               <label>Місце смерті</label>
-              <input value={form.deathPlace} disabled={readOnly}
-                onChange={(e) => set('deathPlace', e.target.value)} />
+              {readOnly
+                ? <div>{form.deathPlace || '—'}</div>
+                : <PlaceInput value={form.deathPlace} onChange={(v) => set('deathPlace', v)} placeholder="Місто чи село…" />}
             </div>
           </div>
 
@@ -96,34 +110,22 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
               onChange={(e) => set('bio', e.target.value)} />
           </div>
 
-          {!readOnly && others.length > 0 && (
+          {!readOnly && (
             <>
               <div>
-                <label>Батьки (оберіть до 2)</label>
-                <div className="stack" style={{ maxHeight: 130, overflowY: 'auto', gap: 4 }}>
-                  {others.map((p) => (
-                    <label key={p.id} style={{ display: 'flex', gap: 8, fontWeight: 400, alignItems: 'center' }}>
-                      <input type="checkbox" style={{ width: 'auto' }}
-                        checked={parents.includes(p.id)}
-                        disabled={!parents.includes(p.id) && parents.length >= 2}
-                        onChange={() => toggleRel('parentIds', p.id)} />
-                      {p.firstName} {p.lastName}
-                    </label>
-                  ))}
-                </div>
+                <label>👨 Батько</label>
+                <PersonPicker people={people} excludeId={form.id} selectedId={father}
+                  onSelect={(id) => setParent('father', id)} placeholder="Пошук батька…" />
               </div>
               <div>
-                <label>Дружина / чоловік</label>
-                <div className="stack" style={{ maxHeight: 110, overflowY: 'auto', gap: 4 }}>
-                  {others.map((p) => (
-                    <label key={p.id} style={{ display: 'flex', gap: 8, fontWeight: 400, alignItems: 'center' }}>
-                      <input type="checkbox" style={{ width: 'auto' }}
-                        checked={(form.spouseIds || []).includes(p.id)}
-                        onChange={() => toggleRel('spouseIds', p.id)} />
-                      {p.firstName} {p.lastName}
-                    </label>
-                  ))}
-                </div>
+                <label>👩 Мати</label>
+                <PersonPicker people={people} excludeId={form.id} selectedId={mother}
+                  onSelect={(id) => setParent('mother', id)} placeholder="Пошук матері…" />
+              </div>
+              <div>
+                <label>💍 Партнер</label>
+                <PersonPicker people={people} excludeId={form.id} selectedId={spouseId}
+                  onSelect={setSpouse} placeholder="Пошук партнера…" />
               </div>
             </>
           )}

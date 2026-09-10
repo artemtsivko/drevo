@@ -312,3 +312,100 @@ label {
   .app-header { padding: 12px 14px; }
   .tabs { padding: 0 10px; }
 }
+
+/* --- Gender picker --- */
+.gender-btn {
+  flex: 1;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 2px solid var(--line);
+  background: var(--paper-2);
+  color: var(--ink-soft);
+}
+.gender-btn.gender-m.active { background: #eaf1fb; border-color: #4d7bc4; color: #2c4c7c; }
+.gender-btn.gender-f.active { background: #fbeaf3; border-color: #c45a94; color: #8c3465; }
+
+/* --- Autocomplete (place / person picker) --- */
+.autocomplete-list {
+  position: absolute;
+  top: 100%; left: 0; right: 0;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 60;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.autocomplete-item {
+  padding: 9px 12px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0ece2;
+}
+.autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item:hover { background: var(--moss-light); }
+
+.person-picker-selected {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-2);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+}
+
+/* --- Quick menu --- */
+.quick-menu-backdrop {
+  position: fixed; inset: 0; z-index: 55;
+}
+.quick-menu {
+  position: absolute;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.18);
+  min-width: 200px;
+  padding: 6px;
+  transform: translate(-10px, 8px);
+}
+.quick-menu-title {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 10px 6px;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.quick-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  color: var(--ink);
+}
+.quick-menu button:hover { background: var(--moss-light); }
+
+/* --- Tree canvas: touch-friendly, fills width, no clipping --- */
+.tree-canvas {
+  height: 580px;
+  width: 100%;
+  overflow: hidden;
+  background: #fbfaf5;
+  touch-action: none;
+}
+@media (max-width: 640px) {
+  .tree-canvas { height: 65vh; }
+}

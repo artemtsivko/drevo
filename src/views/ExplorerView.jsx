@@ -8,7 +8,9 @@ function label(p) {
 function Node({ id, people, depth, onOpen, sharedIds, expanded, toggle, path }) {
   const p = people[id];
   if (!p) return null;
-  const children = (p.childIds || []).filter((c) => people[c]);
+  const children = (p.childIds || [])
+    .filter((c) => people[c])
+    .sort((a, b) => (people[a].lastName || '').localeCompare(people[b].lastName || '', 'uk'));
   const hasChildren = children.length > 0;
   const key = path + '/' + id;
   const isOpen = expanded.has(key);
@@ -52,10 +54,10 @@ export default function ExplorerView({ people, sharedIds, onOpen }) {
     return n;
   });
 
-  // Корені — люди без батьків у цьому дереві
-  const roots = Object.values(people).filter(
-    (p) => !(p.parentIds || []).some((id) => people[id])
-  );
+  // Корені — люди без батьків у цьому дереві, відсортовані за прізвищем
+  const roots = Object.values(people)
+    .filter((p) => !(p.parentIds || []).some((id) => people[id]))
+    .sort((a, b) => (a.lastName || '').localeCompare(b.lastName || '', 'uk'));
 
   if (roots.length === 0) {
     return <div className="empty"><div className="empty-emoji">📂</div>Порожньо.</div>;

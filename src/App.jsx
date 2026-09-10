@@ -46,6 +46,7 @@ export default function App() {
   const [tab, setTab] = useState('tree');
   const [view, setView] = useState('tree');
   const [editing, setEditing] = useState(null);
+  const [prefill, setPrefill] = useState(null);
   const [showModal, setShowModal] = useState(false);
 
   const [incomingAccess, setIncomingAccess] = useState([]);
@@ -107,22 +108,54 @@ export default function App() {
   // Спільні родичі поки визначаємо як 0 (наповнюється після підтверджених об'єднань).
   const sharedIds = new Set();
 
-  const openNew = () => { setEditing(null); setShowModal(true); };
-  const openPerson = (p) => { setEditing(p); setShowModal(true); };
+  const openNew = () => { setEditing(null); setPrefill(null); setShowModal(true); };
+  const openPerson = (p) => { setEditing(p); setPrefill(null); setShowModal(true); };
+
+  // Клік у контекстному меню картки: підготувати нову людину з уже проставленим зв'язком
+  const quickAction = (action, person) => {
+    if (action === 'edit') { openPerson(person); return; }
+    if (action === 'addFather') {
+      setEditing(null);
+      setPrefill({ gender: 'm', childIds: [person.id] });
+      setShowModal(true);
+    } else if (action === 'addMother') {
+      setEditing(null);
+      setPrefill({ gender: 'f', childIds: [person.id] });
+      setShowModal(true);
+    } else if (action === 'addPartner') {
+      setEditing(null);
+      setPrefill({ spouseIds: [person.id] });
+      setShowModal(true);
+    } else if (action === 'addChild') {
+      setEditing(null);
+      const spouse = (person.spouseIds || [])[0];
+      setPrefill({ parentIds: spouse ? [person.id, spouse] : [person.id] });
+      setShowModal(true);
+    }
+  };
 
   const save = async (form) => {
     if (form.id) {
       const { id, ...patch } = form;
       await updatePerson(id, patch);
-      // синхронізуємо зворотні зв'язки батьки/діти
       const fresh = { ...people, [id]: form };
       for (const pid of form.parentIds || []) await linkParentChild(pid, id, fresh);
     } else {
       const newId = await addPerson(user.uid, form);
       const fresh = { ...people, [newId]: { ...form, id: newId } };
       for (const pid of form.parentIds || []) await linkParentChild(pid, newId, fresh);
+      // Якщо додавали як батька/матір комусь (childIds у префілі)
+      for (const cid of form.childIds || []) await linkParentChild(newId, cid, fresh);
+      // Якщо додавали як партнера — зв'язок двосторонній
+      for (const sid of form.spouseIds || []) {
+        const other = people[sid];
+        if (other) {
+          await updatePerson(sid, { spouseIds: Array.from(new Set([...(other.spouseIds || []), newId])) });
+        }
+      }
     }
     setShowModal(false);
+    setPrefill(null);
   };
 
   const remove = async (id) => {
@@ -177,8 +210,8 @@ export default function App() {
               <span className="person-meta">{Object.keys(people).length} родичів</span>
             </div>
 
-            {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} mode="tree" />}
-            {view === 'graph' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} mode="graph" />}
+            {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onQuickAction={quickAction} mode="tree" />}
+            {view === 'graph' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onQuickAction={quickAction} mode="graph" />}
             {view === 'list' && <ListView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
             {view === 'explorer' && <ExplorerView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
           </div>
@@ -198,8 +231,8 @@ export default function App() {
 
       {showModal && (
         <PersonModal
-          person={editing} people={people}
-          onSave={save} onClose={() => setShowModal(false)} onDelete={remove}
+          person={editing || prefill} people={people}
+          onSave={save} onClose={() => { setShowModal(false); setPrefill(null); }} onDelete={remove}
         />
       )}
     </div>

@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import GenderPicker from './GenderPicker.jsx';
+import PlaceInput from './PlaceInput.jsx';
 
 // Майстер першого запуску. Веде користувача через кроки:
 // 1) Я  2) Батьки (тато + мама)  3) Партнер  4) Діти.
@@ -22,26 +24,23 @@ function MiniPerson({ value, onChange, hideGender }) {
         <Field label="Ім'я *" value={value.firstName || ''} onChange={(e) => set('firstName', e.target.value)} />
         <Field label="Прізвище" value={value.lastName || ''} onChange={(e) => set('lastName', e.target.value)} />
       </div>
+      <Field label="Дівоче прізвище (якщо є)" value={value.maidenName || ''} onChange={(e) => set('maidenName', e.target.value)} />
       <div className="grid-2">
         <Field label="Дата народження" type="date" value={value.birthDate || ''} onChange={(e) => set('birthDate', e.target.value)} />
         <Field label="Рік (якщо дата невідома)" type="number" placeholder="напр. 1990" value={value.birthYear || ''} onChange={(e) => set('birthYear', e.target.value)} />
       </div>
-      <Field label="Місце народження" value={value.birthPlace || ''} onChange={(e) => set('birthPlace', e.target.value)} />
+      <div>
+        <label>Місце народження</label>
+        <PlaceInput value={value.birthPlace || ''} onChange={(v) => set('birthPlace', v)} placeholder="Почніть вводити місто чи село…" />
+      </div>
       {!hideGender && (
-        <div>
-          <label>Стать</label>
-          <select value={value.gender || ''} onChange={(e) => set('gender', e.target.value)}>
-            <option value="">—</option>
-            <option value="m">Чоловік</option>
-            <option value="f">Жінка</option>
-          </select>
-        </div>
+        <GenderPicker value={value.gender || ''} onChange={(v) => set('gender', v)} />
       )}
     </div>
   );
 }
 
-const empty = { firstName: '', lastName: '', birthDate: '', birthYear: '', birthPlace: '', gender: '' };
+const empty = { firstName: '', lastName: '', maidenName: '', birthDate: '', birthYear: '', birthPlace: '', gender: '' };
 
 export default function Onboarding({ profile, onFinish, onSkip }) {
   const [step, setStep] = useState(0);
@@ -63,7 +62,6 @@ export default function Onboarding({ profile, onFinish, onSkip }) {
   const removeChild = (i) => setChildren((c) => c.filter((_, j) => j !== i));
 
   const finish = () => {
-    // Збираємо лише заповнені записи (у яких є ім'я)
     const has = (p) => p.firstName && p.firstName.trim();
     onFinish({
       me,
