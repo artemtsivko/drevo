@@ -79,9 +79,10 @@ export async function saveOnboarding(ownerId, data) {
   const { me, father, mother, partner, children } = data;
   const meId = await addPerson(ownerId, { ...me, isSelf: true });
 
+  let fatherId = null, motherId = null;
   const parentIds = [];
-  if (father) parentIds.push(await addPerson(ownerId, father));
-  if (mother) parentIds.push(await addPerson(ownerId, mother));
+  if (father) { fatherId = await addPerson(ownerId, father); parentIds.push(fatherId); }
+  if (mother) { motherId = await addPerson(ownerId, mother); parentIds.push(motherId); }
 
   let partnerId = null;
   if (partner) partnerId = await addPerson(ownerId, partner);
@@ -108,7 +109,7 @@ export async function saveOnboarding(ownerId, data) {
     await updatePerson(cid, { parentIds: cParents });
   }
 
-  return meId;
+  return { meId, fatherId, motherId, partnerId, childIds };
 }
 
 export async function updatePerson(personId, patch) {

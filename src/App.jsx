@@ -4,9 +4,10 @@ import { auth, googleProvider } from './firebase.js';
 import {
   ensureUserProfile, watchPeople, addPerson, updatePerson, deletePerson,
   linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
-  watchProposals, saveOnboarding, getAccessibleTrees,
+  watchProposals, saveOnboarding, getAccessibleTrees, getPeopleOnce,
   watchMyAcceptedProposalsToComplete, completeInitiatorSide,
 } from './lib/store.js';
+import { tryAutoAdopt } from './lib/autoAdopt.js';
 import { buildMergedTree } from './lib/mergeTree.js';
 import { runAutoScan } from './lib/autoScan.js';
 
@@ -124,8 +125,16 @@ export default function App() {
   if (!profile) return <div className="login-wrap"><div className="brand">Завантаження…</div></div>;
 
   const finishOnboarding = async (data) => {
-    await saveOnboarding(user.uid, data);
+    const result = await saveOnboarding(user.uid, data);
     setSkipOnboarding(true);
+    // Перевіряємо батька/матір на сильний збіг з чужими деревами і, якщо знайдено,
+    // автоматично копіюємо їхню гілку (предків, братів/сестер) — без підтвердження.
+    try {
+      const freshMine = await getPeopleOnce(user.uid);
+      await tryAutoAdopt(user.uid, freshMine, result.fatherId, result.motherId);
+    } catch (e) {
+      // Автоприєднання не критичне — тихо ігноруємо помилку, щоб не заважати користувачу
+    }
   };
 
   if (showOnboarding) {
