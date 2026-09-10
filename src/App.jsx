@@ -220,11 +220,11 @@ export default function App() {
   const save = async (form) => {
     if (form.id) {
       const { id, ...patch } = form;
-      await updatePerson(id, patch);
+      await updatePerson(id, patch, user.uid, profile.displayName);
       const fresh = { ...people, [id]: form };
       for (const pid of form.parentIds || []) await linkParentChild(pid, id, fresh);
     } else {
-      const newId = await addPerson(user.uid, form);
+      const newId = await addPerson(user.uid, { ...form, createdByName: profile.displayName }, user.uid);
       const fresh = { ...people, [newId]: { ...form, id: newId } };
       for (const pid of form.parentIds || []) await linkParentChild(pid, newId, fresh);
       // Якщо додавали як батька/матір комусь (childIds у префілі)

@@ -34,6 +34,10 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
   const spouseId = (form.spouseIds || [])[0] || null;
   const setSpouse = (id) => set('spouseIds', id ? [id] : []);
 
+  const createdByName = person && person.createdByName;
+  const lastEditedByName = person && person.lastEditedByName;
+  const editedByDifferent = createdByName && lastEditedByName && lastEditedByName !== createdByName;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -42,6 +46,12 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
           <button className="x-btn" onClick={onClose}>×</button>
         </div>
         <div className="modal-body stack">
+          {createdByName && (
+            <div className="notice" style={{ fontSize: 12 }}>
+              Створив(ла): {createdByName}
+              {editedByDifferent && <> · останнім редагував(ла): {lastEditedByName}</>}
+            </div>
+          )}
           <div className="grid-2">
             <div>
               <label>Ім'я *</label>

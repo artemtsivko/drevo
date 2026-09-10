@@ -50,7 +50,8 @@ export async function getPeopleOnce(ownerId) {
   return people;
 }
 
-export async function addPerson(ownerId, person) {
+export async function addPerson(ownerId, person, actingUid) {
+  const creator = actingUid || ownerId;
   const ref = await addDoc(collection(db, 'people'), {
     ownerId,
     firstName: person.firstName || '',
@@ -69,7 +70,12 @@ export async function addPerson(ownerId, person) {
     childIds: person.childIds || [],
     spouseIds: person.spouseIds || [],
     linkedTo: person.linkedTo || [],
+    createdBy: creator,
+    createdByName: person.createdByName || '',
+    lastEditedBy: creator,
+    lastEditedByName: person.createdByName || '',
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
   return ref.id;
 }
@@ -112,8 +118,13 @@ export async function saveOnboarding(ownerId, data) {
   return { meId, fatherId, motherId, partnerId, childIds };
 }
 
-export async function updatePerson(personId, patch) {
-  await updateDoc(doc(db, 'people', personId), patch);
+export async function updatePerson(personId, patch, actingUid, actingName) {
+  const fullPatch = { ...patch, updatedAt: serverTimestamp() };
+  if (actingUid) {
+    fullPatch.lastEditedBy = actingUid;
+    fullPatch.lastEditedByName = actingName || '';
+  }
+  await updateDoc(doc(db, 'people', personId), fullPatch);
 }
 
 export async function deletePerson(personId) {
