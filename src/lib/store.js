@@ -252,14 +252,22 @@ export async function grantAccess(ownerId, granteeUid, granteeName) {
 // у spaceMembers усіх документів, де uid є ownerId (або вже учасником).
 export async function mergeMySide(uid, otherUid) {
   const snap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', uid)));
-  const updates = [];
-  snap.forEach((d) => {
+  const results = [];
+  for (const d of snap.docs) {
     const data = d.data();
     const members = data.spaceMembers || [];
-    if (members.includes(otherUid)) return; // вже додано
-    updates.push(updateDoc(d.ref, { spaceMembers: Array.from(new Set([...members, otherUid])) }));
-  });
-  await Promise.all(updates);
+    if (members.includes(otherUid)) continue; // вже додано
+    try {
+      await updateDoc(d.ref, { spaceMembers: Array.from(new Set([...members, otherUid])) });
+      results.push({ id: d.id, ok: true });
+    } catch (e) {
+      results.push({ id: d.id, ok: false, error: e.message, ownerId: data.ownerId, members });
+    }
+  }
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) {
+    console.error('mergeMySide: не вдалось оновити', failed);
+  }
 }
 
 // Чи є взаємний grant між двома uid (обидва боки дозволили одне одному).
@@ -313,24 +321,34 @@ export function getSpaceCoMembers(myUid, myPeople) {
 export async function leaveSharedSpace(myUid, otherUid) {
   const mySnap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', myUid)));
 
-  const updates = [];
-  mySnap.forEach((d) => {
+  const results = [];
+  for (const d of mySnap.docs) {
     const data = d.data();
     const members = data.spaceMembers || [];
-    if (!members.includes(otherUid)) return; // не спільний з otherUid — не чіпаємо
-    if (data.ownerId === myUid) {
-      // Мій документ — прибираю otherUid зі spaceMembers, решту учасників лишаю як є.
-      updates.push(updateDoc(d.ref, { spaceMembers: members.filter((m) => m !== otherUid) }));
-    } else {
-      // Чужий документ (я в ньому лише учасник) — виходжу з нього сам.
-      updates.push(updateDoc(d.ref, { spaceMembers: members.filter((m) => m !== myUid) }));
+    if (!members.includes(otherUid)) continue; // не спільний з otherUid — не чіпаємо
+    const newMembers = data.ownerId === myUid
+      ? members.filter((m) => m !== otherUid)
+      : members.filter((m) => m !== myUid);
+    try {
+      await updateDoc(d.ref, { spaceMembers: newMembers });
+      results.push({ id: d.id, ok: true });
+    } catch (e) {
+      results.push({ id: d.id, ok: false, error: e.message, ownerId: data.ownerId, members });
     }
-  });
-  await Promise.all(updates);
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) {
+    console.error('leaveSharedSpace: не вдалось оновити', failed);
+  }
 
   // Прибираю МІЙ бік grant (правила дозволяють видаляти запис, де я ownerId або granteeUid)
-  await deleteDoc(doc(db, 'grants', `${myUid}_${otherUid}`)).catch(() => {});
-  await deleteDoc(doc(db, 'grants', `${otherUid}_${myUid}`)).catch(() => {});
+  await deleteDoc(doc(db, 'grants', `${myUid}_${otherUid}`)).catch((e) => console.warn('grant1:', e.message));
+  await deleteDoc(doc(db, 'grants', `${otherUid}_${myUid}`)).catch((e) => console.warn('grant2:', e.message));
+
+  if (failed.length) {
+    throw new Error(`Не вдалось оновити ${failed.length} записів: ${failed[0].error}`);
+  }
 }
 
 export async function revokeGrant(grantId) {
