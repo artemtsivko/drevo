@@ -5,6 +5,7 @@ import {
   ensureUserProfile, watchPeople, addPerson, updatePerson, deletePerson,
   linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
   watchProposals, saveOnboarding, getAccessibleTrees,
+  watchMyAcceptedProposalsToComplete, completeInitiatorSide,
 } from './lib/store.js';
 import { buildMergedTree } from './lib/mergeTree.js';
 import { runAutoScan } from './lib/autoScan.js';
@@ -73,6 +74,14 @@ export default function App() {
     document.body.style.overflow = modalOpen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   });
+
+  // Якщо я ініціював пропозицію і інша сторона вже підтвердила — довʼязуємо свою половину.
+  useEffect(() => {
+    if (!user) return;
+    return watchMyAcceptedProposalsToComplete(user.uid, (list) => {
+      list.forEach((pr) => { completeInitiatorSide(pr).catch(() => {}); });
+    });
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;

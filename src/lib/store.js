@@ -222,30 +222,90 @@ export function watchProposals(uid, cb) {
   });
 }
 
-// Підтвердження пропозиції: проставляємо симетричний linkedTo на обох персонах
-// і закриваємо пропозицію.
-export async function acceptProposal(pr) {
-  const minePersonSnap = await getDoc(doc(db, 'people', pr.minePersonId));
-  const theirPersonSnap = await getDoc(doc(db, 'people', pr.theirPersonId));
-  if (!minePersonSnap.exists() || !theirPersonSnap.exists()) {
-    await updateDoc(doc(db, 'mergeProposals', pr.id), { status: 'accepted' });
-    return;
-  }
-  const mine = minePersonSnap.data();
-  const theirs = theirPersonSnap.data();
+const FILLABLE_FIELDS = [
+  'lastName', 'maidenName', 'gender', 'birthDate', 'birthYear', 'birthPlace',
+  'deathDate', 'deathPlace', 'bio', 'photoURL',
+];
 
-  const mineLinked = Array.from(
+// Доповнює порожні поля моєї персони даними з іншої сторони (якщо там вони є).
+// Не перезаписує те, що вже заповнено — лише додає відсутнє.
+function fillMissingFields(mine, theirs) {
+  const patch = {};
+  FILLABLE_FIELDS.forEach((f) => {
+    if (!mine[f] && theirs[f]) patch[f] = theirs[f];
+  });
+  return patch;
+}
+
+// Підтвердження пропозиції. КОЖЕН користувач може писати лише у свій документ (правила безпеки),
+// тому respondent (той, хто підтверджує) оновлює linkedTo лише на СВОЇЙ персоні (theirPersonId —
+// це ID у дереві респондента). Ініціатор, коли сам погоджується на власну пропозицію, або коли
+// побачить, що respondent прийняв — оновлює linkedTo на своїй персоні окремим викликом.
+// Простіше: приймаючи, respondent одразу оновлює свою персону І позначає пропозицію 'accepted'.
+// Клієнт ІНІЦІАТОРА, побачивши статус 'accepted' на своїй пропозиції, довзвʼязує свою сторону.
+// Обидві сторони також доповнюють власні порожні поля даними іншої сторони (якщо ті відомі).
+export async function acceptProposal(pr, myUid) {
+  // myUid — це той, хто зараз підтверджує (завжди pr.respondentUid у нашому UI)
+  const isRespondent = myUid === pr.respondentUid;
+  const myPersonId = isRespondent ? pr.theirPersonId : pr.minePersonId;
+  const otherUid = isRespondent ? pr.initiatorUid : pr.respondentUid;
+  const otherPersonId = isRespondent ? pr.minePersonId : pr.theirPersonId;
+
+  const [mySnap, otherSnap] = await Promise.all([
+    getDoc(doc(db, 'people', myPersonId)),
+    getDoc(doc(db, 'people', otherPersonId)),
+  ]);
+  if (!mySnap.exists()) throw new Error('Персону не знайдено — можливо, її вже видалили.');
+  const mine = mySnap.data();
+  const theirs = otherSnap.exists() ? otherSnap.data() : {};
+
+  const merged = Array.from(
+    new Map([...(mine.linkedTo || []), { ownerId: otherUid, personId: otherPersonId }]
+      .map((l) => [l.ownerId + '_' + l.personId, l])).values()
+  );
+  const fillPatch = fillMissingFields(mine, theirs);
+
+  await updateDoc(doc(db, 'people', myPersonId), { linkedTo: merged, ...fillPatch });
+  await updateDoc(doc(db, 'mergeProposals', pr.id), {
+    status: 'accepted',
+    [isRespondent ? 'respondentAccepted' : 'initiatorAccepted']: true,
+  });
+}
+
+// Викликається клієнтом ІНІЦІАТОРА, коли він бачить, що його власна пропозиція отримала
+// статус 'accepted' від респондента, але його сторона ще не зв'язана.
+export async function completeInitiatorSide(pr) {
+  const [mySnap, otherSnap] = await Promise.all([
+    getDoc(doc(db, 'people', pr.minePersonId)),
+    getDoc(doc(db, 'people', pr.theirPersonId)),
+  ]);
+  if (!mySnap.exists()) return;
+  const mine = mySnap.data();
+  const already = (mine.linkedTo || []).some(
+    (l) => l.ownerId === pr.respondentUid && l.personId === pr.theirPersonId
+  );
+  if (already) return;
+  const theirs = otherSnap.exists() ? otherSnap.data() : {};
+  const merged = Array.from(
     new Map([...(mine.linkedTo || []), { ownerId: pr.respondentUid, personId: pr.theirPersonId }]
       .map((l) => [l.ownerId + '_' + l.personId, l])).values()
   );
-  const theirLinked = Array.from(
-    new Map([...(theirs.linkedTo || []), { ownerId: pr.initiatorUid, personId: pr.minePersonId }]
-      .map((l) => [l.ownerId + '_' + l.personId, l])).values()
-  );
+  const fillPatch = fillMissingFields(mine, theirs);
+  await updateDoc(doc(db, 'people', pr.minePersonId), { linkedTo: merged, ...fillPatch });
+}
 
-  await updateDoc(doc(db, 'people', pr.minePersonId), { linkedTo: mineLinked });
-  await updateDoc(doc(db, 'people', pr.theirPersonId), { linkedTo: theirLinked });
-  await updateDoc(doc(db, 'mergeProposals', pr.id), { status: 'accepted' });
+// Пропозиції, які Я ініціював і respondent вже підтвердив, але моя сторона ще не звʼязана.
+export function watchMyAcceptedProposalsToComplete(uid, cb) {
+  const q = query(
+    collection(db, 'mergeProposals'),
+    where('initiatorUid', '==', uid),
+    where('status', '==', 'accepted'),
+  );
+  return onSnapshot(q, (snap) => {
+    const list = [];
+    snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
+    cb(list);
+  });
 }
 
 export async function rejectProposal(proposalId) {

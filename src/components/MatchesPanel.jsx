@@ -81,8 +81,12 @@ export default function MatchesPanel({ uid, profile, myPeople, proposals }) {
   };
 
   const accept = async (pr) => {
-    await acceptProposal(pr);
-    getMyLinks(uid).then(setMyLinks);
+    try {
+      await acceptProposal(pr, uid);
+      getMyLinks(uid).then(setMyLinks);
+    } catch (err) {
+      alert('Не вдалось підтвердити об\'єднання: ' + err.message);
+    }
   };
   const reject = async (pr) => rejectProposal(pr.id);
 
