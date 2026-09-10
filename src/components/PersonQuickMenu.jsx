@@ -13,7 +13,7 @@ const RELATION_LABEL = {
 export default function PersonQuickMenu({
   x, y, person, people,
   onEdit, onAddNew, onLinkExisting, onClose,
-  hasFather, hasMother,
+  hasFather, hasMother, hasPartner,
 }) {
   const [relationMode, setRelationMode] = useState(null); // 'father' | 'mother' | 'partner' | 'child' | null
   const [pickMode, setPickMode] = useState(false); // показуємо пошук наявної людини
@@ -31,7 +31,7 @@ export default function PersonQuickMenu({
             <button onClick={onEdit}>✏️ Редагувати</button>
             {!hasFather && <button onClick={() => startRelation('father')}>👨 Додати батька</button>}
             {!hasMother && <button onClick={() => startRelation('mother')}>👩 Додати матір</button>}
-            <button onClick={() => startRelation('partner')}>💍 Додати партнера</button>
+            {!hasPartner && <button onClick={() => startRelation('partner')}>💍 Додати партнера</button>}
             <button onClick={() => startRelation('child')}>👶 Додати дитину</button>
           </>
         )}

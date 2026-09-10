@@ -334,6 +334,7 @@ export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkEx
           x={menu.x} y={menu.y} person={menu.person} people={people}
           hasFather={(menu.person.parentIds || []).some((id) => people[id] && people[id].gender !== 'f')}
           hasMother={(menu.person.parentIds || []).some((id) => people[id] && people[id].gender === 'f')}
+          hasPartner={(menu.person.spouseIds || []).some((id) => people[id])}
           onEdit={() => act(onOpen)}
           onAddNew={(relation) => act(onAddNew, relation)}
           onLinkExisting={(relation, existingId) => act(onLinkExisting, relation, existingId)}
