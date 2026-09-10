@@ -61,6 +61,16 @@ export default function App() {
     if (u) setProfile(await ensureUserProfile(u));
   }), []);
 
+  // Показуємо майстер, коли дерево порожнє і користувач його не пропустив
+  const showOnboarding = peopleLoaded && Object.keys(people).length === 0 && !skipOnboarding;
+
+  // Блокуємо скрол фонової сторінки, коли відкрита модалка (форма людини або майстер)
+  useEffect(() => {
+    const modalOpen = showModal || showOnboarding;
+    document.body.style.overflow = modalOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  });
+
   useEffect(() => {
     if (!user) return;
     const unsubs = [
@@ -76,9 +86,6 @@ export default function App() {
   if (user === undefined) return <div className="login-wrap"><div className="brand">🌳 Рід</div></div>;
   if (user === null) return <Login />;
   if (!profile) return <div className="login-wrap"><div className="brand">Завантаження…</div></div>;
-
-  // Показуємо майстер, коли дерево порожнє і користувач його не пропустив
-  const showOnboarding = peopleLoaded && Object.keys(people).length === 0 && !skipOnboarding;
 
   const finishOnboarding = async (data) => {
     await saveOnboarding(user.uid, data);
