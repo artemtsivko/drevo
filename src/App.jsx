@@ -24,7 +24,7 @@ function Login() {
   return (
     <div className="login-wrap">
       <div className="login-card">
-        <div className="brand">🌳 Рід</div>
+        <div className="brand">🌳 Drevo</div>
         <p>
           Ведіть родовід разом. Додавайте родичів, будуйте дерево — і знаходьте
           спільних предків з іншими родинами.
@@ -127,7 +127,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [user, profile, peopleLoaded, Object.keys(people).length, myAccess.length]);
 
-  if (user === undefined) return <div className="login-wrap"><div className="brand">🌳 Рід</div></div>;
+  if (user === undefined) return <div className="login-wrap"><div className="brand">🌳 Drevo</div></div>;
   if (user === null) return <Login />;
   if (!profile) return <div className="login-wrap"><div className="brand">Завантаження…</div></div>;
 
@@ -148,7 +148,7 @@ export default function App() {
     return (
       <div>
         <header className="app-header">
-          <div className="brand">🌳 Рід</div>
+          <div className="brand">🌳 Drevo</div>
           <div className="header-spacer" />
           <div className="user-chip">
             {profile.photoURL && <img src={profile.photoURL} alt="" />}
@@ -271,7 +271,7 @@ export default function App() {
   return (
     <div>
       <header className="app-header">
-        <div className="brand">🌳 Рід</div>
+        <div className="brand">🌳 Drevo</div>
         <div className="header-spacer" />
         {tab === 'tree' && (
           <button className="btn" onClick={openNew}>+ Додати родича</button>
