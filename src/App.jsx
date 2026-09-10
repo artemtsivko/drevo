@@ -274,7 +274,7 @@ export default function App() {
               <span className="person-meta">{Object.keys(displayPeople).length} родичів</span>
             </div>
 
-            {view === 'tree' && <TreeView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} mode="tree" />}
+            {view === 'tree' && <TreeView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} onAddPerson={openNew} mode="tree" />}
             {view === 'list' && <ListView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} />}
             {view === 'explorer' && <ExplorerView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} />}
           </div>

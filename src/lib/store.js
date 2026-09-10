@@ -300,6 +300,16 @@ export async function getPublicUsers() {
   return list;
 }
 
+// Усі користувачі системи (включно з приватними) — використовується ЛИШЕ для фонового
+// автопошуку збігів. Сам факт приватності не приховує людину від алгоритму порівняння,
+// але приховує від людей повний доступ до чужого дерева (це окреме право, grants).
+export async function getAllUsersForScan() {
+  const snap = await getDocs(collection(db, 'users'));
+  const list = [];
+  snap.forEach((d) => list.push(d.data()));
+  return list;
+}
+
 // Дерева, доступні мені для об'єднаного перегляду: моє власне + ті, кому я дав/хто дав мені доступ.
 export async function getAccessibleTrees(uid) {
   const own = await getPeopleOnce(uid);

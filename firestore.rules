@@ -8,18 +8,18 @@ service cloud.firestore {
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Люди: власник має повний доступ; інші можуть читати,
-    // якщо родовід власника публічний або їм надано доступ (grant).
+    // Люди: власник має повний доступ на запис.
+    // Читання дозволене будь-якому автентифікованому користувачу — це потрібно для
+    // фонового автопошуку збігів між деревами, включно з приватними.
+    // Застереження: додаток НЕ показує в інтерфейсі повний чужий родовід без grant —
+    // лише короткий контекст (ім'я, рік, 2-3 звʼязки) у картці пропозиції об'єднання.
+    // Це UI-обмеження, не обмеження бази даних.
     match /people/{personId} {
       allow create: if request.auth != null
         && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if request.auth != null
         && resource.data.ownerId == request.auth.uid;
-      allow read: if request.auth != null && (
-        resource.data.ownerId == request.auth.uid
-        || isOwnerPublic(resource.data.ownerId)
-        || hasGrant(resource.data.ownerId, request.auth.uid)
-      );
+      allow read: if request.auth != null;
     }
 
     // Запити доступу
@@ -54,11 +54,5 @@ service cloud.firestore {
       );
     }
 
-    function isOwnerPublic(ownerId) {
-      return get(/databases/$(database)/documents/users/$(ownerId)).data.isPublic == true;
-    }
-    function hasGrant(ownerId, uid) {
-      return exists(/databases/$(database)/documents/grants/$(ownerId + '_' + uid));
-    }
   }
 }

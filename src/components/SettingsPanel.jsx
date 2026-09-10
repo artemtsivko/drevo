@@ -57,7 +57,10 @@ export default function SettingsPanel({
       <div className="card stack">
         <div>
           <h2 className="section-title">Приватність родоводу</h2>
-          <p className="section-sub">Публічний родовід можуть знаходити інші користувачі для пошуку спільних родичів.</p>
+          <p className="section-sub">
+            Автопошук збігів працює завжди, незалежно від цього налаштування. Приватність визначає лише,
+            чи можуть інші відкрити ваш повний родовід без вашого дозволу (доступу).
+          </p>
         </div>
         <div className="pill-toggle">
           <button className={!isPublic ? 'active' : ''} onClick={() => savePrivacy(false)}>🔒 Приватний</button>

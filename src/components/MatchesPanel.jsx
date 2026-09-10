@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { findMatches } from '../lib/matching.js';
 import {
-  getPublicUsers, getPeopleOnce, createMergeProposal,
+  getAllUsersForScan, getPeopleOnce, createMergeProposal,
   acceptProposal, rejectProposal, getMyLinks, unlinkPersons,
 } from '../lib/store.js';
 
@@ -51,9 +51,9 @@ export default function MatchesPanel({ uid, profile, myPeople, proposals }) {
   const scan = async () => {
     setScanning(true);
     setScanned(false);
-    const publicUsers = await getPublicUsers();
+    const allUsers = await getAllUsersForScan();
     const found = [];
-    for (const u of publicUsers) {
+    for (const u of allUsers) {
       if (u.uid === uid) continue;
       const theirPeople = await getPeopleOnce(u.uid);
       const ms = findMatches(myPeople, theirPeople);
@@ -169,12 +169,10 @@ export default function MatchesPanel({ uid, profile, myPeople, proposals }) {
           </button>
         </div>
 
-        {!profile.isPublic && (
-          <div className="notice notice-warn">
-            Ваш родовід приватний — інші не бачитимуть вас у пошуку. Зробіть його публічним у Налаштуваннях
-            для двостороннього пошуку (доступ, наданий напряму, теж скановиться, незалежно від приватності).
-          </div>
-        )}
+        <div className="notice">
+          Пошук збігів працює для всіх — і публічних, і приватних родоводів. Приватність лише приховує
+          повний доступ до вашого дерева: іншим показуються тільки ім'я, рік і кілька зв'язків для звірки при пропозиції об'єднання.
+        </div>
 
         {scanned && matches.length === 0 && (
           <div className="empty" style={{ padding: 24 }}>Збігів не знайдено.</div>

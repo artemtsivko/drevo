@@ -1,25 +1,18 @@
 import { findMatches } from './matching.js';
 import {
-  getPublicUsers, getPeopleOnce, createMergeProposal, proposalExists,
+  getAllUsersForScan, getPeopleOnce, createMergeProposal, proposalExists,
 } from './store.js';
 
-// Автоматичний фоновий пошук збігів між моїм деревом і:
-// 1) усіма публічними деревами інших користувачів,
-// 2) деревами тих, з ким я вже поділився/хто поділився зі мною доступом (grants).
-// Для кожного знайденого збігу, якщо ще немає активної пропозиції — створює нову.
-// Викликається періодично (напр. при вході і раз на кілька хвилин) або вручну.
+// Автоматичний фоновий пошук збігів між моїм деревом і деревами ВСІХ інших користувачів,
+// включно з приватними — приватність не приховує людину від алгоритму порівняння,
+// вона лише обмежує, що показується в інтерфейсі (лише короткий контекст при пропозиції).
 export async function runAutoScan(uid, profile, myPeople, grantedOwnerIds) {
   if (!profile.autoMatchEnabled) return { checked: 0, created: 0 };
   if (Object.keys(myPeople).length === 0) return { checked: 0, created: 0 };
 
-  const candidateOwners = new Map(); // ownerId -> {uid, displayName}
-
-  const publicUsers = await getPublicUsers();
-  publicUsers.forEach((u) => { if (u.uid !== uid) candidateOwners.set(u.uid, u); });
-
-  (grantedOwnerIds || []).forEach((o) => {
-    if (o.uid !== uid) candidateOwners.set(o.uid, o);
-  });
+  const allUsers = await getAllUsersForScan();
+  const candidateOwners = new Map();
+  allUsers.forEach((u) => { if (u.uid !== uid) candidateOwners.set(u.uid, u); });
 
   let checked = 0, created = 0;
 

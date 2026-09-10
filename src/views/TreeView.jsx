@@ -146,7 +146,7 @@ function border(p) {
   return '#3f6b4c';
 }
 
-export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkExisting, mode }) {
+export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkExisting, onAddPerson, mode }) {
   const { unitPos, memberUnit, width, height, gen, gens, minGen } = useMemo(() => layout(people), [people]);
   const [zoom, setZoom] = useState(0.85);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -200,11 +200,15 @@ export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkEx
   const openMenu = (e, p) => {
     e.stopPropagation();
     const rect = containerRef.current.getBoundingClientRect();
-    setMenu({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      person: p,
-    });
+    const MENU_W = 230, MENU_H_MAX = 260;
+    let x = e.clientX - rect.left;
+    let y = e.clientY - rect.top;
+    // не даємо меню виходити за праву/нижню межу контейнера
+    x = Math.min(x, rect.width - MENU_W - 10);
+    y = Math.min(y, rect.height - MENU_H_MAX - 10);
+    x = Math.max(x, 10);
+    y = Math.max(y, 10);
+    setMenu({ x, y, person: p });
   };
 
   const act = (fn, ...args) => {
@@ -245,6 +249,9 @@ export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkEx
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }} ref={containerRef}>
       <div className="row" style={{ position: 'absolute', top: 10, right: 10, zIndex: 5, gap: 6 }}>
+        {onAddPerson && (
+          <button className="btn btn-sm" onClick={onAddPerson}>+ Людина</button>
+        )}
         <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.min(2, z + 0.15))}>+</button>
         <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.max(0.3, z - 0.15))}>−</button>
         <button className="btn btn-ghost btn-sm" onClick={() => { setZoom(0.85); setPan({ x: 0, y: 0 }); }}>⟳</button>
