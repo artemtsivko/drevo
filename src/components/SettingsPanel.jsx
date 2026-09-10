@@ -35,6 +35,10 @@ export default function SettingsPanel({
   const approve = async (req) => {
     await grantAccess(uid, req.fromUid, req.fromName);
     await respondAccess(req.id, 'approved');
+    setMsg({
+      t: 'ok',
+      s: `Доступ надано ${req.fromName || 'користувачу'}. Якщо доступ взаємний — ваші родоводи щойно об'єдналися в один спільний, редагувати можуть обидва.`,
+    });
   };
   const deny = async (req) => respondAccess(req.id, 'denied');
 
@@ -71,7 +75,11 @@ export default function SettingsPanel({
       <div className="card stack">
         <div>
           <h2 className="section-title">Запросити доступ</h2>
-          <p className="section-sub">Введіть email іншого користувача, щоб попросити доступ до його повного родоводу.</p>
+          <p className="section-sub">
+            Введіть email іншого користувача, щоб попросити доступ до його родоводу.
+            Якщо доступ стане взаємним (ви обидва дозволите одне одному) — родоводи зіллються
+            в один спільний, і редагувати людей зможете обидва.
+          </p>
         </div>
         <div className="row">
           <input placeholder="email@example.com" value={email}

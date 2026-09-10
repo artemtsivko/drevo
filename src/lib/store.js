@@ -32,9 +32,12 @@ export async function getUserProfile(uid) {
 }
 
 // ---- Люди (родичі) ----
-// Кожна людина належить дереву власника: поле ownerId.
-export function watchPeople(ownerId, cb) {
-  const q = query(collection(db, 'people'), where('ownerId', '==', ownerId));
+// Кожна людина належить простору спільного редагування: spaceMembers — масив uid,
+// хто може редагувати. Спочатку це лише сам власник [ownerId]; коли двоє дають доступ
+// одне одному (взаємний grant), обидва додаються в spaceMembers усіх існуючих записів
+// з обох боків — і відтоді це справді один спільний родовід на двох.
+export function watchPeople(uid, cb) {
+  const q = query(collection(db, 'people'), where('spaceMembers', 'array-contains', uid));
   return onSnapshot(q, (snap) => {
     const people = {};
     snap.forEach((d) => { people[d.id] = { id: d.id, ...d.data() }; });
@@ -42,7 +45,18 @@ export function watchPeople(ownerId, cb) {
   });
 }
 
-export async function getPeopleOnce(ownerId) {
+export async function getPeopleOnce(uid) {
+  const q = query(collection(db, 'people'), where('spaceMembers', 'array-contains', uid));
+  const snap = await getDocs(q);
+  const people = {};
+  snap.forEach((d) => { people[d.id] = { id: d.id, ...d.data() }; });
+  return people;
+}
+
+// Читає дерево за ORIGINAL creator (ownerId), незалежно від spaceMembers —
+// використовується лише для автопошуку збігів/сканування чужих дерев,
+// де нам потрібні саме "їхні" дані для порівняння, а не спільний простір.
+export async function getPeopleByCreator(ownerId) {
   const q = query(collection(db, 'people'), where('ownerId', '==', ownerId));
   const snap = await getDocs(q);
   const people = {};
@@ -50,10 +64,28 @@ export async function getPeopleOnce(ownerId) {
   return people;
 }
 
-export async function addPerson(ownerId, person, actingUid) {
+// Міграція: старі записи (створені до появи spaceMembers) мають лише ownerId.
+// Одноразово при вході проставляємо їм spaceMembers = [ownerId], інакше вони
+// зникнуть із запиту array-contains. Безпечно викликати повторно — пропускає вже мігровані.
+export async function migrateLegacyPeople(uid) {
+  const q = query(collection(db, 'people'), where('ownerId', '==', uid));
+  const snap = await getDocs(q);
+  const updates = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    if (!data.spaceMembers || data.spaceMembers.length === 0) {
+      updates.push(updateDoc(d.ref, { spaceMembers: [uid] }));
+    }
+  });
+  if (updates.length) await Promise.all(updates);
+}
+
+export async function addPerson(ownerId, person, actingUid, spaceMembers) {
   const creator = actingUid || ownerId;
+  const members = spaceMembers && spaceMembers.length ? Array.from(new Set(spaceMembers)) : [ownerId];
   const ref = await addDoc(collection(db, 'people'), {
     ownerId,
+    spaceMembers: members,
     firstName: person.firstName || '',
     lastName: person.lastName || '',
     maidenName: person.maidenName || '',
@@ -197,6 +229,43 @@ export async function grantAccess(ownerId, granteeUid, granteeName) {
   await setDoc(doc(db, 'grants', id), {
     ownerId, granteeUid, granteeName, createdAt: serverTimestamp(),
   });
+
+  // Перевіряємо, чи це взаємний доступ (зустрічний grant granteeUid -> ownerId вже існує).
+  // Якщо так — це і є момент "двоє в парі": зливаємо простори редагування назавжди.
+  const reverseId = `${granteeUid}_${ownerId}`;
+  const reverseSnap = await getDoc(doc(db, 'grants', reverseId));
+  if (reverseSnap.exists()) {
+    await mergeSpaces(ownerId, granteeUid);
+  }
+}
+
+// Зливає простори редагування двох користувачів: усі їхні існуючі записи людей
+// стають доступними для редагування ОБОМ (spaceMembers розширюється на обидва uid).
+// Викликається лише після підтвердженого взаємного доступу (grant в обидва боки).
+export async function mergeSpaces(uidA, uidB) {
+  const [peopleA, peopleB] = await Promise.all([
+    getPeopleByCreator(uidA),
+    getPeopleByCreator(uidB),
+  ]);
+  // Також враховуємо записи, які вже є в чиємусь розширеному просторі (напр. потрійне злиття)
+  const allDocsSnap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', uidA)));
+  const allDocsSnapB = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', uidB)));
+
+  const touched = new Map(); // id -> {ref, currentMembers}
+  const collect = (snap) => snap.forEach((d) => touched.set(d.id, { ref: d.ref, members: d.data().spaceMembers || [] }));
+  collect(allDocsSnap);
+  collect(allDocsSnapB);
+  Object.values(peopleA).forEach((p) => { if (!touched.has(p.id)) touched.set(p.id, { ref: doc(db, 'people', p.id), members: p.spaceMembers || [] }); });
+  Object.values(peopleB).forEach((p) => { if (!touched.has(p.id)) touched.set(p.id, { ref: doc(db, 'people', p.id), members: p.spaceMembers || [] }); });
+
+  // Обʼєднаний простір = всі uid, що вже фігурують хоч в одному з документів, + uidA/uidB
+  const unifiedSpace = new Set([uidA, uidB]);
+  touched.forEach(({ members }) => members.forEach((m) => unifiedSpace.add(m)));
+  const finalSpace = Array.from(unifiedSpace);
+
+  const updates = [];
+  touched.forEach(({ ref }) => { updates.push(updateDoc(ref, { spaceMembers: finalSpace })); });
+  await Promise.all(updates);
 }
 
 export async function revokeGrant(grantId) {

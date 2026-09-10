@@ -5,7 +5,7 @@ import {
   ensureUserProfile, watchPeople, addPerson, updatePerson, deletePerson,
   linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
   watchProposals, saveOnboarding, getAccessibleTrees, getPeopleOnce,
-  watchMyAcceptedProposalsToComplete, completeInitiatorSide,
+  watchMyAcceptedProposalsToComplete, completeInitiatorSide, migrateLegacyPeople,
 } from './lib/store.js';
 import { tryAutoAdopt } from './lib/autoAdopt.js';
 import { buildMergedTree } from './lib/mergeTree.js';
@@ -86,14 +86,21 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    const unsubs = [
-      watchPeople(user.uid, (p) => { setPeople(p); setPeopleLoaded(true); }),
-      watchIncomingAccess(user.uid, setIncomingAccess),
-      watchGrants(user.uid, setGrants),
-      watchMyAccess(user.uid, setMyAccess),
-      watchProposals(user.uid, setProposals),
-    ];
-    return () => unsubs.forEach((f) => f && f());
+    let cancelled = false;
+    let unsubs = [];
+    (async () => {
+      // Мігруємо старі записи (без spaceMembers) перед підпискою, інакше вони не потраплять у вибірку
+      await migrateLegacyPeople(user.uid).catch(() => {});
+      if (cancelled) return;
+      unsubs = [
+        watchPeople(user.uid, (p) => { setPeople(p); setPeopleLoaded(true); }),
+        watchIncomingAccess(user.uid, setIncomingAccess),
+        watchGrants(user.uid, setGrants),
+        watchMyAccess(user.uid, setMyAccess),
+        watchProposals(user.uid, setProposals),
+      ];
+    })();
+    return () => { cancelled = true; unsubs.forEach((f) => f && f()); };
   }, [user]);
 
   // Перебудовуємо об'єднаний родовід (моє дерево + дерева тих, кому дав/хто дав доступ)
@@ -165,10 +172,13 @@ export default function App() {
 
   const openNew = () => { setEditing(null); setPrefill(null); setShowModal(true); };
 
-  // Якщо клікнули на обʼєднаний вузол — редагуємо саме МІЙ запис (не чужий і не злитий псевдо-обʼєкт).
+  // Якщо документ уже в моєму просторі (spaceMembers включає мене) — це один і той же
+  // запис, який можна редагувати напряму. isMerged (linkedTo) — інший механізм: дві окремі
+  // персони, підтверджені як "одна людина", але без спільного права редагування.
   const resolveMine = (mergedPerson) => {
-    if (!mergedPerson.isMerged) return people[mergedPerson.id] ? mergedPerson : null;
-    const mySource = (mergedPerson.sources || []).find((s) => s.ownerId === user.uid);
+    if (people[mergedPerson.id]) return people[mergedPerson.id];
+    if (!mergedPerson.isMerged) return null;
+    const mySource = (mergedPerson.sources || []).find((s) => people[s.personId]);
     return mySource ? people[mySource.personId] : null;
   };
 
@@ -217,6 +227,14 @@ export default function App() {
     }
   };
 
+  // Поточний спільний простір: усі uid, що вже мають доступ до редагування моїх людей.
+  // Якщо дерево порожнє (новий користувач) — простір це просто я сам.
+  const mySpaceMembers = () => {
+    const set = new Set([user.uid]);
+    Object.values(people).forEach((p) => (p.spaceMembers || []).forEach((m) => set.add(m)));
+    return Array.from(set);
+  };
+
   const save = async (form) => {
     if (form.id) {
       const { id, ...patch } = form;
@@ -224,7 +242,7 @@ export default function App() {
       const fresh = { ...people, [id]: form };
       for (const pid of form.parentIds || []) await linkParentChild(pid, id, fresh);
     } else {
-      const newId = await addPerson(user.uid, { ...form, createdByName: profile.displayName }, user.uid);
+      const newId = await addPerson(user.uid, { ...form, createdByName: profile.displayName }, user.uid, mySpaceMembers());
       const fresh = { ...people, [newId]: { ...form, id: newId } };
       for (const pid of form.parentIds || []) await linkParentChild(pid, newId, fresh);
       // Якщо додавали як батька/матір комусь (childIds у префілі)

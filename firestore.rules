@@ -8,17 +8,27 @@ service cloud.firestore {
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Люди: власник має повний доступ на запис.
+    // Люди: редагувати може будь-хто зі spaceMembers — це і є "спільний родовід на двох":
+    // коли двоє дають доступ одне одному взаємно, їхні простори зливаються (mergeSpaces),
+    // і відтоді обидва можуть додавати та редагувати спільних людей.
     // Читання дозволене будь-якому автентифікованому користувачу — це потрібно для
     // фонового автопошуку збігів між деревами, включно з приватними.
-    // Застереження: додаток НЕ показує в інтерфейсі повний чужий родовід без grant —
+    // Застереження: додаток НЕ показує в інтерфейсі повний чужий родовід без spaceMembers —
     // лише короткий контекст (ім'я, рік, 2-3 звʼязки) у картці пропозиції об'єднання.
     // Це UI-обмеження, не обмеження бази даних.
     match /people/{personId} {
       allow create: if request.auth != null
-        && request.resource.data.ownerId == request.auth.uid;
-      allow update, delete: if request.auth != null
-        && resource.data.ownerId == request.auth.uid;
+        && request.auth.uid in request.resource.data.spaceMembers;
+      // Звичайне редагування: я в spaceMembers документа.
+      // Міграційний шлях: старий документ без spaceMembers, але я його ownerId —
+      // дозволяємо одноразово проставити spaceMembers (і більше нічого не змінювати цим запитом).
+      allow update: if request.auth != null && (
+        (('spaceMembers' in resource.data) && request.auth.uid in resource.data.spaceMembers)
+        || (!('spaceMembers' in resource.data) && resource.data.ownerId == request.auth.uid)
+      );
+      allow delete: if request.auth != null
+        && ('spaceMembers' in resource.data)
+        && request.auth.uid in resource.data.spaceMembers;
       allow read: if request.auth != null;
     }
 
