@@ -218,7 +218,6 @@ export default function App() {
             <div className="row">
               <div className="pill-toggle">
                 <button className={view === 'tree' ? 'active' : ''} onClick={() => setView('tree')}>Дерево</button>
-                <button className={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>Граф</button>
                 <button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>Список</button>
                 <button className={view === 'explorer' ? 'active' : ''} onClick={() => setView('explorer')}>Провідник</button>
               </div>
@@ -227,7 +226,6 @@ export default function App() {
             </div>
 
             {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} mode="tree" />}
-            {view === 'graph' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} mode="graph" />}
             {view === 'list' && <ListView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
             {view === 'explorer' && <ExplorerView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
           </div>

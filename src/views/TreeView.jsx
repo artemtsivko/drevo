@@ -7,7 +7,7 @@ import PersonQuickMenu from '../components/PersonQuickMenu.jsx';
 // - батьки/предки — рівнем вище.
 // Рівень (generation) рахуємо відносно персони "я": я = 0, батьки = -1, діти = +1.
 
-const CARD_W = 220, CARD_H_SINGLE = 60, CARD_H_COUPLE = 92;
+const CARD_W = 220, CARD_H_SINGLE = 74, CARD_H_COUPLE = 116;
 const GAP_X = 30, GAP_Y = 110, SLOT_W = 140;
 
 function assignGenerations(people) {
@@ -108,6 +108,31 @@ function born(p) {
   const d = p.deathDate ? p.deathDate.slice(0, 4) : '';
   if (!b && !d) return '';
   return `${b || '?'}${d ? '–' + d : ''}`;
+}
+
+// Розраховує вік (якщо живий) або скільки прожив (якщо помер), з роками/датами.
+function ageInfo(p) {
+  const birthYear = p.birthDate ? parseInt(p.birthDate.slice(0, 4), 10) : (p.birthYear ? parseInt(p.birthYear, 10) : null);
+  if (!birthYear) return null;
+
+  const isDead = !!(p.deathDate || p.deathYear);
+  if (isDead) {
+    const deathYear = p.deathDate ? parseInt(p.deathDate.slice(0, 4), 10) : parseInt(p.deathYear, 10);
+    if (!deathYear) return null;
+    const years = deathYear - birthYear;
+    return { label: `† прожив${p.gender === 'f' ? 'а' : ''} ${years} р.`, dead: true };
+  }
+
+  const now = new Date();
+  let age = now.getFullYear() - birthYear;
+  if (p.birthDate) {
+    const bd = new Date(p.birthDate);
+    const hadBirthdayThisYear = (now.getMonth() > bd.getMonth()) ||
+      (now.getMonth() === bd.getMonth() && now.getDate() >= bd.getDate());
+    if (!hadBirthdayThisYear) age -= 1;
+  }
+  if (age < 0 || age > 130) return null;
+  return { label: `${age} р.`, dead: false };
 }
 
 function bg(p) {
@@ -263,6 +288,7 @@ export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkEx
                     const shared = sharedIds.has(p.id);
                     const rowH = isCouple ? h / 2 : h;
                     const ry = i * rowH;
+                    const age = ageInfo(p);
                     return (
                       <g key={mid} transform={`translate(0,${ry})`}
                         style={{ cursor: 'pointer' }}
@@ -271,12 +297,18 @@ export default function TreeView({ people, sharedIds, onOpen, onAddNew, onLinkEx
                           fill={bg(p)}
                           stroke={p.isSelf ? '#2c5038' : shared ? '#b08341' : border(p)}
                           strokeWidth={p.isSelf ? '2.6' : '1.4'} />
-                        <text x="14" y={rowH / 2 - 4} fontFamily="Georgia, serif" fontSize="14" fontWeight="700" fill="#1c2620">
+                        <text x="14" y={rowH / 2 - 16} fontFamily="Georgia, serif" fontSize="14" fontWeight="700" fill="#1c2620">
                           {(p.firstName + ' ' + (p.lastName || '')).trim().slice(0, 22)}
                         </text>
-                        <text x="14" y={rowH / 2 + 14} fontFamily="Segoe UI, sans-serif" fontSize="11" fill="#4a5850">
+                        <text x="14" y={rowH / 2 + 2} fontFamily="Segoe UI, sans-serif" fontSize="11" fill="#4a5850">
                           {born(p)}{p.maidenName ? ' · уродж. ' + p.maidenName.slice(0, 12) : ''}
                         </text>
+                        {age && (
+                          <text x="14" y={rowH / 2 + 18} fontFamily="Segoe UI, sans-serif" fontSize="11"
+                            fontWeight="600" fill={age.dead ? '#8c5a1e' : '#3f6b4c'}>
+                            {age.label}
+                          </text>
+                        )}
                         {p.isSelf && <circle cx={w - 14} cy="12" r="5" fill="#2c5038" />}
                         {shared && !p.isSelf && <circle cx={w - 14} cy="12" r="5" fill="#b08341" />}
                       </g>
