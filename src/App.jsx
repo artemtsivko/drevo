@@ -92,7 +92,7 @@ export default function App() {
       await migrateLegacyPeople(user.uid).catch(() => {});
       // Довиконуємо свою частину злиття для всіх взаємних доступів, які ще не завершені
       // (наприклад, я дав доступ раніше, а вона підтвердила щойно — я довершую при вході)
-      await completePendingMerges(user.uid).catch(() => {});
+      await completePendingMerges(user.uid).catch((e) => console.warn('completePendingMerges:', e.message));
       if (cancelled) return;
       unsubs = [
         watchPeople(user.uid, (p) => { setPeople(p); setPeopleLoaded(true); }),
@@ -109,7 +109,7 @@ export default function App() {
   // частину злиття, якщо зʼявилась (без потреби перезаходити в застосунок).
   useEffect(() => {
     if (!user) return;
-    completePendingMerges(user.uid).catch(() => {});
+    completePendingMerges(user.uid).catch((e) => console.warn('completePendingMerges:', e.message));
   }, [user, grants.length, myAccess.length]);
 
   // Автоматичний фоновий пошук збігів: при вході і кожні 5 хвилин.
