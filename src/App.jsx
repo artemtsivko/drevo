@@ -4,10 +4,11 @@ import { auth, googleProvider } from './firebase.js';
 import {
   ensureUserProfile, watchPeople, addPerson, updatePerson, deletePerson,
   linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
-  watchProposals,
+  watchProposals, saveOnboarding,
 } from './lib/store.js';
 
 import PersonModal from './components/PersonModal.jsx';
+import Onboarding from './components/Onboarding.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 import MatchesPanel from './components/MatchesPanel.jsx';
 import ListView from './views/ListView.jsx';
@@ -51,6 +52,8 @@ export default function App() {
   const [grants, setGrants] = useState([]);
   const [myAccess, setMyAccess] = useState([]);
   const [proposals, setProposals] = useState([]);
+  const [peopleLoaded, setPeopleLoaded] = useState(false);
+  const [skipOnboarding, setSkipOnboarding] = useState(false);
 
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u || null);
@@ -60,7 +63,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     const unsubs = [
-      watchPeople(user.uid, setPeople),
+      watchPeople(user.uid, (p) => { setPeople(p); setPeopleLoaded(true); }),
       watchIncomingAccess(user.uid, setIncomingAccess),
       watchGrants(user.uid, setGrants),
       watchMyAccess(user.uid, setMyAccess),
@@ -72,6 +75,34 @@ export default function App() {
   if (user === undefined) return <div className="login-wrap"><div className="brand">🌳 Рід</div></div>;
   if (user === null) return <Login />;
   if (!profile) return <div className="login-wrap"><div className="brand">Завантаження…</div></div>;
+
+  // Показуємо майстер, коли дерево порожнє і користувач його не пропустив
+  const showOnboarding = peopleLoaded && Object.keys(people).length === 0 && !skipOnboarding;
+
+  const finishOnboarding = async (data) => {
+    await saveOnboarding(user.uid, data);
+    setSkipOnboarding(true);
+  };
+
+  if (showOnboarding) {
+    return (
+      <div>
+        <header className="app-header">
+          <div className="brand">🌳 Рід</div>
+          <div className="header-spacer" />
+          <div className="user-chip">
+            {profile.photoURL && <img src={profile.photoURL} alt="" />}
+            <span>{profile.displayName}</span>
+          </div>
+        </header>
+        <Onboarding
+          profile={profile}
+          onFinish={finishOnboarding}
+          onSkip={() => setSkipOnboarding(true)}
+        />
+      </div>
+    );
+  }
 
   // Спільні родичі поки визначаємо як 0 (наповнюється після підтверджених об'єднань).
   const sharedIds = new Set();

@@ -123,8 +123,9 @@ export default function TreeView({ people, sharedIds, onOpen, mode }) {
                 <g key={p.id} transform={`translate(${pt.x},${pt.y})`}
                   style={{ cursor: 'pointer' }} onClick={() => onOpen(p)}>
                   <rect width={NODE_W} height={NODE_H} rx="9"
-                    fill={shared ? '#fbf3e3' : '#fffdf8'}
-                    stroke={shared ? '#b08341' : '#3f6b4c'} strokeWidth="1.6" />
+                    fill={p.isSelf ? '#e3ecdf' : shared ? '#fbf3e3' : '#fffdf8'}
+                    stroke={p.isSelf ? '#2c5038' : shared ? '#b08341' : '#3f6b4c'}
+                    strokeWidth={p.isSelf ? '2.4' : '1.6'} />
                   <text x="12" y="24" fontFamily="Georgia, serif" fontSize="14" fontWeight="700" fill="#1c2620">
                     {(p.firstName + ' ' + (p.lastName || '')).slice(0, 18)}
                   </text>

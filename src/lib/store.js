@@ -63,12 +63,50 @@ export async function addPerson(ownerId, person) {
     deathPlace: person.deathPlace || '',
     bio: person.bio || '',
     photoURL: person.photoURL || '',
+    isSelf: person.isSelf || false,
     parentIds: person.parentIds || [],
     childIds: person.childIds || [],
     spouseIds: person.spouseIds || [],
     createdAt: serverTimestamp(),
   });
   return ref.id;
+}
+
+// Пакетне збереження результату онбордингу: створює всіх людей і зв'язки за один прохід.
+export async function saveOnboarding(ownerId, data) {
+  const { me, father, mother, partner, children } = data;
+  const meId = await addPerson(ownerId, { ...me, isSelf: true });
+
+  const parentIds = [];
+  if (father) parentIds.push(await addPerson(ownerId, father));
+  if (mother) parentIds.push(await addPerson(ownerId, mother));
+
+  let partnerId = null;
+  if (partner) partnerId = await addPerson(ownerId, partner);
+
+  const childIds = [];
+  for (const ch of children || []) childIds.push(await addPerson(ownerId, ch));
+
+  // Зв'язки для "я": батьки зверху, діти знизу, партнер збоку
+  await updatePerson(meId, {
+    parentIds,
+    childIds,
+    spouseIds: partnerId ? [partnerId] : [],
+  });
+
+  // Зворотні зв'язки
+  for (const pid of parentIds) {
+    await updatePerson(pid, { childIds: [meId] });
+  }
+  if (partnerId) {
+    await updatePerson(partnerId, { spouseIds: [meId], childIds });
+  }
+  for (const cid of childIds) {
+    const cParents = partnerId ? [meId, partnerId] : [meId];
+    await updatePerson(cid, { parentIds: cParents });
+  }
+
+  return meId;
 }
 
 export async function updatePerson(personId, patch) {

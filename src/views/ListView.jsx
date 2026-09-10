@@ -46,6 +46,7 @@ export default function ListView({ people, sharedIds, onOpen }) {
                 {lifespan(p)}{p.birthPlace ? ` · ${p.birthPlace}` : ''}
               </div>
             </div>
+            {p.isSelf && <span className="shared-tag" style={{ color: '#2c5038', borderColor: '#2c5038' }}>це я</span>}
             {sharedIds.has(p.id) && <span className="shared-tag">спільний</span>}
           </div>
         ))}
