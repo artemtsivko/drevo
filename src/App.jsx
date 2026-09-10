@@ -4,8 +4,10 @@ import { auth, googleProvider } from './firebase.js';
 import {
   ensureUserProfile, watchPeople, addPerson, updatePerson, deletePerson,
   linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
-  watchProposals, saveOnboarding,
+  watchProposals, saveOnboarding, getAccessibleTrees,
 } from './lib/store.js';
+import { buildMergedTree } from './lib/mergeTree.js';
+import { runAutoScan } from './lib/autoScan.js';
 
 import PersonModal from './components/PersonModal.jsx';
 import Onboarding from './components/Onboarding.jsx';
@@ -55,6 +57,7 @@ export default function App() {
   const [proposals, setProposals] = useState([]);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [skipOnboarding, setSkipOnboarding] = useState(false);
+  const [mergedPeople, setMergedPeople] = useState(null); // null = ще не завантажено, показуємо власне дерево
 
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u || null);
@@ -82,6 +85,30 @@ export default function App() {
     ];
     return () => unsubs.forEach((f) => f && f());
   }, [user]);
+
+  // Перебудовуємо об'єднаний родовід (моє дерево + дерева тих, кому дав/хто дав доступ)
+  // при кожній зміні власних даних або списку доступів.
+  useEffect(() => {
+    if (!user || !peopleLoaded) return;
+    let cancelled = false;
+    (async () => {
+      const trees = await getAccessibleTrees(user.uid);
+      if (cancelled) return;
+      const { people: merged } = buildMergedTree(trees);
+      setMergedPeople(merged);
+    })();
+    return () => { cancelled = true; };
+  }, [user, people, grants, myAccess, peopleLoaded]);
+
+  // Автоматичний фоновий пошук збігів: при вході і кожні 5 хвилин.
+  useEffect(() => {
+    if (!user || !profile || !peopleLoaded) return;
+    const grantedOwnerIds = myAccess.map((g) => ({ uid: g.ownerId }));
+    const scan = () => runAutoScan(user.uid, profile, people, grantedOwnerIds).catch(() => {});
+    scan();
+    const interval = setInterval(scan, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [user, profile, peopleLoaded, Object.keys(people).length, myAccess.length]);
 
   if (user === undefined) return <div className="login-wrap"><div className="brand">🌳 Рід</div></div>;
   if (user === null) return <Login />;
@@ -112,14 +139,34 @@ export default function App() {
     );
   }
 
-  // Спільні родичі поки визначаємо як 0 (наповнюється після підтверджених об'єднань).
-  const sharedIds = new Set();
+  // Для перегляду показуємо об'єднане дерево (моє + доступні мені), поки воно не готове — власне.
+  const displayPeople = mergedPeople || people;
+  const sharedIds = new Set(
+    Object.values(displayPeople).filter((p) => p.isMerged).map((p) => p.id)
+  );
 
   const openNew = () => { setEditing(null); setPrefill(null); setShowModal(true); };
-  const openPerson = (p) => { setEditing(p); setPrefill(null); setShowModal(true); };
 
-  // "Нова людина": відкриваємо форму з уже проставленим зв'язком-префілом
-  const addNewRelated = (relation, person) => {
+  // Якщо клікнули на обʼєднаний вузол — редагуємо саме МІЙ запис (не чужий і не злитий псевдо-обʼєкт).
+  const resolveMine = (mergedPerson) => {
+    if (!mergedPerson.isMerged) return people[mergedPerson.id] ? mergedPerson : null;
+    const mySource = (mergedPerson.sources || []).find((s) => s.ownerId === user.uid);
+    return mySource ? people[mySource.personId] : null;
+  };
+
+  const openPerson = (p) => {
+    const mine = resolveMine(p);
+    if (!mine) {
+      alert('Цей родич веде з іншого дерева — редагувати його може лише той користувач, у кого він доданий.');
+      return;
+    }
+    setEditing(mine); setPrefill(null); setShowModal(true);
+  };
+
+  // "Нова людина": відкриваємо форму з уже проставленим зв'язком-префілом (завжди відносно МОГО запису)
+  const addNewRelated = (relation, mergedPerson) => {
+    const person = resolveMine(mergedPerson);
+    if (!person) { alert('Можна додавати родичів лише до своїх записів.'); return; }
     setEditing(null);
     if (relation === 'father') {
       setPrefill({ gender: 'm', childIds: [person.id] });
@@ -134,8 +181,10 @@ export default function App() {
     setShowModal(true);
   };
 
-  // "Обрати з наявних": напряму пов'язуємо двох людей, без відкриття форми
-  const linkExisting = async (relation, existingId, person) => {
+  // "Обрати з наявних": напряму пов'язуємо двох людей у МОЄМУ дереві, без відкриття форми
+  const linkExisting = async (relation, existingId, mergedPerson) => {
+    const person = resolveMine(mergedPerson);
+    if (!person) { alert('Можна додавати родичів лише до своїх записів.'); return; }
     const fresh = people;
     if (relation === 'father' || relation === 'mother') {
       await linkParentChild(existingId, person.id, fresh);
@@ -222,12 +271,12 @@ export default function App() {
                 <button className={view === 'explorer' ? 'active' : ''} onClick={() => setView('explorer')}>Провідник</button>
               </div>
               <div className="header-spacer" />
-              <span className="person-meta">{Object.keys(people).length} родичів</span>
+              <span className="person-meta">{Object.keys(displayPeople).length} родичів</span>
             </div>
 
-            {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} mode="tree" />}
-            {view === 'list' && <ListView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
-            {view === 'explorer' && <ExplorerView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
+            {view === 'tree' && <TreeView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} mode="tree" />}
+            {view === 'list' && <ListView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} />}
+            {view === 'explorer' && <ExplorerView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} />}
           </div>
         )}
 

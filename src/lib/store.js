@@ -15,6 +15,7 @@ export async function ensureUserProfile(user) {
       email: user.email || '',
       photoURL: user.photoURL || '',
       isPublic: false,
+      autoMatchEnabled: true,
       createdAt: serverTimestamp(),
     });
   }
@@ -67,6 +68,7 @@ export async function addPerson(ownerId, person) {
     parentIds: person.parentIds || [],
     childIds: person.childIds || [],
     spouseIds: person.spouseIds || [],
+    linkedTo: person.linkedTo || [],
     createdAt: serverTimestamp(),
   });
   return ref.id;
@@ -200,6 +202,7 @@ export function watchMyAccess(uid, cb) {
 }
 
 // ---- Пропозиції об'єднання / правок ----
+// type: 'link' — пропозиція, що дві персони (mine/theirs) — одна й та ж людина.
 export async function createMergeProposal(proposal) {
   await addDoc(collection(db, 'mergeProposals'), {
     ...proposal, status: 'pending', createdAt: serverTimestamp(),
@@ -219,8 +222,65 @@ export function watchProposals(uid, cb) {
   });
 }
 
-export async function respondProposal(proposalId, status) {
-  await updateDoc(doc(db, 'mergeProposals', proposalId), { status });
+// Підтвердження пропозиції: проставляємо симетричний linkedTo на обох персонах
+// і закриваємо пропозицію.
+export async function acceptProposal(pr) {
+  const minePersonSnap = await getDoc(doc(db, 'people', pr.minePersonId));
+  const theirPersonSnap = await getDoc(doc(db, 'people', pr.theirPersonId));
+  if (!minePersonSnap.exists() || !theirPersonSnap.exists()) {
+    await updateDoc(doc(db, 'mergeProposals', pr.id), { status: 'accepted' });
+    return;
+  }
+  const mine = minePersonSnap.data();
+  const theirs = theirPersonSnap.data();
+
+  const mineLinked = Array.from(
+    new Map([...(mine.linkedTo || []), { ownerId: pr.respondentUid, personId: pr.theirPersonId }]
+      .map((l) => [l.ownerId + '_' + l.personId, l])).values()
+  );
+  const theirLinked = Array.from(
+    new Map([...(theirs.linkedTo || []), { ownerId: pr.initiatorUid, personId: pr.minePersonId }]
+      .map((l) => [l.ownerId + '_' + l.personId, l])).values()
+  );
+
+  await updateDoc(doc(db, 'people', pr.minePersonId), { linkedTo: mineLinked });
+  await updateDoc(doc(db, 'people', pr.theirPersonId), { linkedTo: theirLinked });
+  await updateDoc(doc(db, 'mergeProposals', pr.id), { status: 'accepted' });
+}
+
+export async function rejectProposal(proposalId) {
+  await updateDoc(doc(db, 'mergeProposals', proposalId), { status: 'rejected' });
+}
+
+// Розірвати вже підтверджене об'єднання конкретної людини (якщо збіг був помилковим).
+export async function unlinkPersons(ownerIdA, personIdA, ownerIdB, personIdB) {
+  const refA = doc(db, 'people', personIdA);
+  const refB = doc(db, 'people', personIdB);
+  const [snapA, snapB] = await Promise.all([getDoc(refA), getDoc(refB)]);
+  if (snapA.exists()) {
+    const linked = (snapA.data().linkedTo || []).filter(
+      (l) => !(l.ownerId === ownerIdB && l.personId === personIdB)
+    );
+    await updateDoc(refA, { linkedTo: linked });
+  }
+  if (snapB.exists()) {
+    const linked = (snapB.data().linkedTo || []).filter(
+      (l) => !(l.ownerId === ownerIdA && l.personId === personIdA)
+    );
+    await updateDoc(refB, { linkedTo: linked });
+  }
+}
+
+// Усі підтверджені об'єднання, де я є однією зі сторін (для показу в Налаштуваннях).
+export async function getMyLinks(uid) {
+  const myPeople = await getPeopleOnce(uid);
+  const links = [];
+  Object.values(myPeople).forEach((p) => {
+    (p.linkedTo || []).forEach((l) => {
+      links.push({ myPersonId: p.id, myPerson: p, otherOwnerId: l.ownerId, otherPersonId: l.personId });
+    });
+  });
+  return links;
 }
 
 // ---- Пошук користувачів (за email) ----
@@ -238,4 +298,40 @@ export async function getPublicUsers() {
   const list = [];
   snap.forEach((d) => list.push(d.data()));
   return list;
+}
+
+// Дерева, доступні мені для об'єднаного перегляду: моє власне + ті, кому я дав/хто дав мені доступ.
+export async function getAccessibleTrees(uid) {
+  const own = await getPeopleOnce(uid);
+  const trees = [{ ownerId: uid, people: own }];
+
+  const grantsToMe = await getDocs(query(collection(db, 'grants'), where('granteeUid', '==', uid)));
+  const ownerIds = new Set();
+  grantsToMe.forEach((d) => ownerIds.add(d.data().ownerId));
+
+  for (const ownerId of ownerIds) {
+    const theirs = await getPeopleOnce(ownerId);
+    trees.push({ ownerId, people: theirs });
+  }
+  return trees;
+}
+
+// Чи вже існує (pending/accepted) пропозиція між цими двома конкретними персонами —
+// щоб автоскан не спамив однаковими пропозиціями повторно.
+export async function proposalExists(minePersonId, theirPersonId) {
+  const q1 = query(
+    collection(db, 'mergeProposals'),
+    where('minePersonId', '==', minePersonId),
+    where('theirPersonId', '==', theirPersonId),
+  );
+  const q2 = query(
+    collection(db, 'mergeProposals'),
+    where('minePersonId', '==', theirPersonId),
+    where('theirPersonId', '==', minePersonId),
+  );
+  const [s1, s2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+  let found = false;
+  s1.forEach((d) => { if (d.data().status !== 'rejected') found = true; });
+  s2.forEach((d) => { if (d.data().status !== 'rejected') found = true; });
+  return found;
 }

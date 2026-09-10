@@ -8,12 +8,18 @@ export default function SettingsPanel({
   profile, uid, incomingAccess, grants, myAccess,
 }) {
   const [isPublic, setIsPublic] = useState(profile.isPublic);
+  const [autoMatch, setAutoMatch] = useState(profile.autoMatchEnabled !== false);
   const [email, setEmail] = useState('');
   const [msg, setMsg] = useState(null);
 
   const savePrivacy = async (val) => {
     setIsPublic(val);
     await updateUserSettings(uid, { isPublic: val });
+  };
+
+  const saveAutoMatch = async (val) => {
+    setAutoMatch(val);
+    await updateUserSettings(uid, { autoMatchEnabled: val });
   };
 
   const askAccess = async () => {
@@ -34,6 +40,20 @@ export default function SettingsPanel({
 
   return (
     <div className="stack">
+      <div className="card stack">
+        <div>
+          <h2 className="section-title">Автоматичний пошук збігів</h2>
+          <p className="section-sub">
+            Система сама шукає спільних родичів у публічних деревах та в тих, з ким ви поділились доступом,
+            і пропонує об'єднання. Можна вимкнути, якщо не хочете отримувати такі пропозиції.
+          </p>
+        </div>
+        <div className="pill-toggle">
+          <button className={autoMatch ? 'active' : ''} onClick={() => saveAutoMatch(true)}>✅ Увімкнено</button>
+          <button className={!autoMatch ? 'active' : ''} onClick={() => saveAutoMatch(false)}>🚫 Вимкнено</button>
+        </div>
+      </div>
+
       <div className="card stack">
         <div>
           <h2 className="section-title">Приватність родоводу</h2>
