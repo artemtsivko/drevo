@@ -295,12 +295,23 @@ function border(p) {
 export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAddNew, onLinkExisting, onAddPerson, onAddChildDirect, onMatchPerson, fullscreen, onToggleFullscreen }) {
   const [focusPersonId, setFocusPersonId] = useState(null);
   const { unitPos, memberUnit, width, height, gen, minGen, scoped: displayPeople } = useMemo(() => layout(people, focusPersonId), [people, focusPersonId]);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(0.5);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef(null);
   const pinch = useRef(null);
   const [menu, setMenu] = useState(null);
   const containerRef = useRef(null);
+
+  // Автопідбір початкового масштабу: дерево має вписатись у видиму область контейнера
+  // (але не збільшуватись більше 1, якщо дерево й так мале — це виглядало б неприродно
+  // великим). Перераховуємо, коли змінюється розмір дерева, фокус чи сам контейнер.
+  React.useEffect(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const fitZoom = Math.min(1, (rect.width - 40) / width, (rect.height - 40) / height);
+    setZoom(Math.max(0.15, fitZoom));
+    setPan({ x: 0, y: 0 });
+  }, [width, height, focusPersonId]);
 
   if (Object.keys(people).length === 0) {
     return <div className="empty"><div className="empty-emoji">🌿</div>Дерево з'явиться, коли додасте родичів.</div>;
@@ -329,7 +340,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
       e.preventDefault();
     } else if (e.touches.length === 2 && pinch.current) {
       const d = dist(e.touches);
-      const nz = Math.min(2, Math.max(0.3, pinch.current.zoom * (d / pinch.current.d)));
+      const nz = Math.min(2, Math.max(0.15, pinch.current.zoom * (d / pinch.current.d)));
       setZoom(nz);
       e.preventDefault();
     }
@@ -339,7 +350,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
   const onWheel = (e) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.08 : 0.08;
-    setZoom((z) => Math.min(2, Math.max(0.3, z + delta)));
+    setZoom((z) => Math.min(2, Math.max(0.15, z + delta)));
   };
 
   const openMenu = (e, p) => {
@@ -400,8 +411,15 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
           <button className="btn btn-sm" onClick={onAddPerson}>+ Людина</button>
         )}
         <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.min(2, z + 0.15))}>+</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.max(0.3, z - 0.15))}>−</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>⟳</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.max(0.15, z - 0.15))}>−</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => {
+          if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            const fitZoom = Math.min(1, (rect.width - 40) / width, (rect.height - 40) / height);
+            setZoom(Math.max(0.15, fitZoom));
+          }
+          setPan({ x: 0, y: 0 });
+        }}>⟳</button>
         {onToggleFullscreen && (
           <button className="btn btn-ghost btn-sm" onClick={onToggleFullscreen} title={fullscreen ? 'Згорнути' : 'На весь екран'}>
             {fullscreen ? '⤡' : '⤢'}
@@ -415,7 +433,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
         onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
         onWheel={onWheel}
       >
-        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMin meet" style={{ display: 'block', cursor: drag.current ? 'grabbing' : 'grab' }}>
+        <svg width="100%" height="100%" style={{ display: 'block', cursor: drag.current ? 'grabbing' : 'grab' }}>
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {childEdges.map((e, i) => {
               const my = (e.sy + e.cy) / 2;
