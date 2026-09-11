@@ -150,7 +150,7 @@ export default function App() {
   const openNew = () => { setEditing(null); setPrefill(null); setShowModal(true); };
   const openPerson = (p) => { setEditing(p); setPrefill(null); setShowModal(true); };
 
-  const addNewRelated = (relation, person) => {
+  const addNewRelated = async (relation, person) => {
     setEditing(null);
     if (relation === 'father') {
       setPrefill({ gender: 'm', childIds: [person.id] });
@@ -163,8 +163,15 @@ export default function App() {
       const spouse = (person.spouseIds || [])[0];
       setPrefill({ parentIds: spouse ? [person.id, spouse] : [person.id] });
     } else if (relation === 'sibling') {
-      // Брат/сестра приєднується до ТИХ САМИХ батьків, що вже є в person
-      setPrefill({ parentIds: [...(person.parentIds || [])] });
+      let parentIds = person.parentIds || [];
+      if (parentIds.length === 0) {
+        // У людини ще немає жодного батька — створюємо спільного (нейтрального,
+        // стать користувач вкаже сам), щоб і вона, і новий брат/сестра мали на кого спертись.
+        const newParentId = await addPerson(space.id, { firstName: 'Батько/мати', childIds: [person.id] }, user.uid, profile.displayName);
+        await updatePerson(person.id, { parentIds: [newParentId] });
+        parentIds = [newParentId];
+      }
+      setPrefill({ parentIds: [...parentIds] });
     }
     setShowModal(true);
   };

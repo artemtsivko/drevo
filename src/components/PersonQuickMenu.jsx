@@ -36,7 +36,7 @@ export default function PersonQuickMenu({
             {!hasMother && <button onClick={() => startRelation('mother')}>👩 Додати матір</button>}
             {!hasPartner && <button onClick={() => startRelation('partner')}>💍 Додати партнера</button>}
             <button onClick={() => startRelation('child')}>👶 Додати дитину</button>
-            {hasAnyParent && <button onClick={() => startRelation('sibling')}>👫 Додати брата/сестру</button>}
+            <button onClick={() => startRelation('sibling')}>👫 Додати брата/сестру</button>
           </>
         )}
 

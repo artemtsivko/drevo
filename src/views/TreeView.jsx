@@ -168,10 +168,14 @@ function layout(people, focusPersonId) {
     let firstChildCenter = null, lastChildCenter = null;
     kids.forEach((k, i) => {
       const [, right] = placeSubtree(k, cursor);
+      // Якщо цей юніт уже був розміщений раніше (спільна дитина кількох гілок) на позиції
+      // ЛІВІШЕ за поточний cursor, right теж буде лівіше — не даємо курсору рухатись назад,
+      // інакше наступні брати/сестри "наскочать" на вже розміщені картки.
+      const safeRight = Math.max(right, cursor + CARD_W);
       const center = unitX[k.id];
       if (i === 0) firstChildCenter = center;
       lastChildCenter = center;
-      cursor = right + GAP_X;
+      cursor = safeRight + GAP_X;
     });
     const rightEdge = cursor - GAP_X;
     const myCenter = (firstChildCenter + lastChildCenter) / 2;
@@ -202,6 +206,24 @@ function layout(people, focusPersonId) {
     if (visited.has(u.id)) return;
     const [, right] = placeSubtree(u, cursor);
     cursor = right + FAMILY_GAP;
+  });
+
+  // Пост-прохід: гарантуємо мінімальний відступ між СУСІДНІМИ юнітами одного покоління.
+  // Рекурсивне розміщення вище може дати накладання, якщо один юніт (спільна дитина
+  // кількох гілок, чи людина з кількома шлюбами) вже зафіксований у позиції, що конфліктує
+  // з новим контекстом розміщення сусіда. Проходимо кожне покоління зліва направо і
+  // розсуваємо все, що ближче за мінімально необхідну відстань.
+  const MIN_GAP = CARD_W + GAP_X;
+  gens.forEach((g) => {
+    const rowUnits = allUnits.filter((u) => u.gen === g).sort((a, b) => unitX[a.id] - unitX[b.id]);
+    for (let i = 1; i < rowUnits.length; i++) {
+      const prev = rowUnits[i - 1], cur = rowUnits[i];
+      const minAllowed = unitX[prev.id] + MIN_GAP;
+      if (unitX[cur.id] < minAllowed) {
+        const shift = minAllowed - unitX[cur.id];
+        unitX[cur.id] += shift;
+      }
+    }
   });
 
   // Переводимо x-центри в абсолютні позиції з y за поколінням
