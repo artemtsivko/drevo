@@ -2,69 +2,52 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Профілі: кожен читає публічні, редагує лише свій
+    // Профілі користувачів
     match /users/{userId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Люди: редагувати може будь-хто зі spaceMembers — це і є "спільний родовід на двох":
-    // коли двоє дають доступ одне одному взаємно, кожна сторона додає іншу у spaceMembers
-    // своїх документів (mergeMySide, двофазно — кожен пише лише свої записи).
-    // Читання дозволене будь-якому автентифікованому користувачу — це потрібно для
-    // фонового автопошуку збігів між деревами, включно з приватними.
-    // Застереження: додаток НЕ показує в інтерфейсі повний чужий родовід без spaceMembers —
-    // лише короткий контекст (ім'я, рік, 2-3 звʼязки) у картці пропозиції об'єднання.
-    // Це UI-обмеження, не обмеження бази даних.
-    match /people/{personId} {
-      allow create: if request.auth != null
-        && request.auth.uid in request.resource.data.spaceMembers;
-      // Звичайне редагування: я в spaceMembers документа.
-      // Міграційний шлях: старий документ без spaceMembers, але я його ownerId —
-      // дозволяємо одноразово проставити spaceMembers (і більше нічого не змінювати цим запитом).
-      allow update: if request.auth != null && (
-        (('spaceMembers' in resource.data) && request.auth.uid in resource.data.spaceMembers)
-        || (!('spaceMembers' in resource.data) && resource.data.ownerId == request.auth.uid)
-      );
-      allow delete: if request.auth != null
-        && ('spaceMembers' in resource.data)
-        && request.auth.uid in resource.data.spaceMembers;
+    // Family Spaces: спільний простір редагування. Членство визначає, хто може
+    // редагувати людей, що йому належать (people.spaceId == цей простір).
+    match /familySpaces/{spaceId} {
       allow read: if request.auth != null;
+      // Створити можна лише простір, де я сам є єдиним чи одним із members.
+      allow create: if request.auth != null
+        && request.auth.uid in request.resource.data.members;
+      // Оновлювати (додавати/прибирати учасників) може будь-хто, хто ВЖЕ є учасником —
+      // це потрібно і для прийняття обʼєднання (toSpace-сторона додає учасників fromSpace),
+      // і для виходу (learFamilySpace прибирає себе).
+      allow update: if request.auth != null
+        && request.auth.uid in resource.data.members;
+      // Видалити можна лише простір, де я є учасником.
+      allow delete: if request.auth != null
+        && request.auth.uid in resource.data.members;
     }
 
-    // Запити доступу
-    match /accessRequests/{id} {
+    // Люди: право редагування визначається належністю uid до spaceMembers того простору,
+    // якому належить документ (people.spaceId -> familySpaces/{spaceId}.members).
+    match /people/{personId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.auth.uid in get(/databases/$(database)/documents/familySpaces/$(request.resource.data.spaceId)).data.members;
+      allow update: if request.auth != null
+        && request.auth.uid in get(/databases/$(database)/documents/familySpaces/$(resource.data.spaceId)).data.members;
+      allow delete: if request.auth != null
+        && request.auth.uid in get(/databases/$(database)/documents/familySpaces/$(resource.data.spaceId)).data.members;
+    }
+
+    // Пропозиції об'єднання просторів
+    match /spaceMergeProposals/{id} {
       allow create: if request.auth != null
         && request.resource.data.fromUid == request.auth.uid;
-      allow read, update: if request.auth != null && (
-        resource.data.fromUid == request.auth.uid
-        || resource.data.toUid == request.auth.uid
+      allow read: if request.auth != null;
+      // Оновлювати (прийняти/відхилити) може будь-хто автентифікований, хто є учасником
+      // toSpace (той, кому пропозицію адресовано) — перевіряємо через сам toSpaceId.
+      allow update: if request.auth != null && (
+        request.auth.uid in get(/databases/$(database)/documents/familySpaces/$(resource.data.toSpaceId)).data.members
+        || request.auth.uid == resource.data.fromUid
       );
     }
-
-    // Надані доступи
-    match /grants/{id} {
-      allow create: if request.auth != null
-        && request.resource.data.ownerId == request.auth.uid;
-      allow read: if request.auth != null && (
-        resource.data.ownerId == request.auth.uid
-        || resource.data.granteeUid == request.auth.uid
-      );
-      allow delete: if request.auth != null && (
-        resource.data.ownerId == request.auth.uid
-        || resource.data.granteeUid == request.auth.uid
-      );
-    }
-
-    // Пропозиції об'єднання
-    match /mergeProposals/{id} {
-      allow create: if request.auth != null
-        && request.resource.data.initiatorUid == request.auth.uid;
-      allow read, update: if request.auth != null && (
-        resource.data.initiatorUid == request.auth.uid
-        || resource.data.respondentUid == request.auth.uid
-      );
-    }
-
   }
 }

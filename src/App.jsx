@@ -3,12 +3,9 @@ import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { auth, googleProvider } from './firebase.js';
 import {
   ensureUserProfile, watchPeople, addPerson, updatePerson, deletePerson,
-  linkParentChild, watchIncomingAccess, watchGrants, watchMyAccess,
-  watchProposals, saveOnboarding, getPeopleOnce,
-  watchMyAcceptedProposalsToComplete, completeInitiatorSide, migrateLegacyPeople,
-  completePendingMerges,
+  linkParentChild, saveOnboarding, watchMySpace,
+  watchIncomingSpaceMergeProposals, cleanupEmptyMergedSpaces,
 } from './lib/store.js';
-import { tryAutoAdopt } from './lib/autoAdopt.js';
 import { runAutoScan } from './lib/autoScan.js';
 
 import PersonModal from './components/PersonModal.jsx';
@@ -46,6 +43,7 @@ function Login() {
 export default function App() {
   const [user, setUser] = useState(undefined);
   const [profile, setProfile] = useState(null);
+  const [space, setSpace] = useState(null); // { id, members }
   const [people, setPeople] = useState({});
   const [tab, setTab] = useState('tree');
   const [view, setView] = useState('tree');
@@ -53,90 +51,66 @@ export default function App() {
   const [prefill, setPrefill] = useState(null);
   const [showModal, setShowModal] = useState(false);
 
-  const [incomingAccess, setIncomingAccess] = useState([]);
-  const [grants, setGrants] = useState([]);
-  const [myAccess, setMyAccess] = useState([]);
   const [proposals, setProposals] = useState([]);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [skipOnboarding, setSkipOnboarding] = useState(false);
 
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u || null);
-    if (u) setProfile(await ensureUserProfile(u));
+    if (u) {
+      setProfile(await ensureUserProfile(u));
+      cleanupEmptyMergedSpaces(u.uid).catch(() => {});
+    }
   }), []);
+
+  // Стежимо за моїм простором (може змінитись, коли приєднуюсь/виходжу з обʼєднання)
+  useEffect(() => {
+    if (!user) return;
+    return watchMySpace(user.uid, setSpace);
+  }, [user]);
+
+  // Люди підписані на поточний простір
+  useEffect(() => {
+    if (!space) { setPeople({}); setPeopleLoaded(false); return; }
+    setPeopleLoaded(false);
+    return watchPeople(space.id, (p) => { setPeople(p); setPeopleLoaded(true); });
+  }, [space && space.id]);
+
+  // Вхідні пропозиції обʼєднання просторів
+  useEffect(() => {
+    if (!space) return;
+    return watchIncomingSpaceMergeProposals(space.id, setProposals);
+  }, [space && space.id]);
 
   // Показуємо майстер, коли дерево порожнє і користувач його не пропустив
   const showOnboarding = peopleLoaded && Object.keys(people).length === 0 && !skipOnboarding;
 
-  // Блокуємо скрол фонової сторінки, коли відкрита модалка (форма людини або майстер)
+  // Блокуємо скрол фонової сторінки, коли відкрита модалка
   useEffect(() => {
     const modalOpen = showModal || showOnboarding;
     document.body.style.overflow = modalOpen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   });
 
-  // Якщо я ініціював пропозицію і інша сторона вже підтвердила — довʼязуємо свою половину.
-  useEffect(() => {
-    if (!user) return;
-    return watchMyAcceptedProposalsToComplete(user.uid, (list) => {
-      list.forEach((pr) => { completeInitiatorSide(pr).catch(() => {}); });
-    });
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    let unsubs = [];
-    (async () => {
-      // Мігруємо старі записи (без spaceMembers) перед підпискою, інакше вони не потраплять у вибірку
-      await migrateLegacyPeople(user.uid).catch(() => {});
-      // Довиконуємо свою частину злиття для всіх взаємних доступів, які ще не завершені
-      // (наприклад, я дав доступ раніше, а вона підтвердила щойно — я довершую при вході)
-      await completePendingMerges(user.uid).catch((e) => console.warn('completePendingMerges:', e.message));
-      if (cancelled) return;
-      unsubs = [
-        watchPeople(user.uid, (p) => { setPeople(p); setPeopleLoaded(true); }),
-        watchIncomingAccess(user.uid, setIncomingAccess),
-        watchGrants(user.uid, setGrants),
-        watchMyAccess(user.uid, setMyAccess),
-        watchProposals(user.uid, setProposals),
-      ];
-    })();
-    return () => { cancelled = true; unsubs.forEach((f) => f && f()); };
-  }, [user]);
-
-  // Коли змінюється список моїх grants — перевіряємо взаємність і довиконуємо свою
-  // частину злиття, якщо зʼявилась (без потреби перезаходити в застосунок).
-  useEffect(() => {
-    if (!user) return;
-    completePendingMerges(user.uid).catch((e) => console.warn('completePendingMerges:', e.message));
-  }, [user, grants.length, myAccess.length]);
-
   // Автоматичний фоновий пошук збігів: при вході і кожні 5 хвилин.
   useEffect(() => {
-    if (!user || !profile || !peopleLoaded) return;
-    const grantedOwnerIds = myAccess.map((g) => ({ uid: g.ownerId }));
-    const scan = () => runAutoScan(user.uid, profile, people, grantedOwnerIds).catch(() => {});
+    if (!user || !profile || !space || !peopleLoaded) return;
+    const scan = () => runAutoScan(user.uid, profile, space.id, people).catch((e) => console.warn('autoScan:', e.message));
     scan();
     const interval = setInterval(scan, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [user, profile, peopleLoaded, Object.keys(people).length, myAccess.length]);
+  }, [user, profile, space && space.id, peopleLoaded, Object.keys(people).length]);
 
   if (user === undefined) return <div className="login-wrap"><div className="brand">🌳 Drevo</div></div>;
   if (user === null) return <Login />;
-  if (!profile) return <div className="login-wrap"><div className="brand">Завантаження…</div></div>;
+  if (!profile || !space) return <div className="login-wrap"><div className="brand">Завантаження…</div></div>;
 
   const finishOnboarding = async (data) => {
-    const result = await saveOnboarding(user.uid, data);
+    await saveOnboarding(space.id, data, user.uid, profile.displayName);
     setSkipOnboarding(true);
-    // Перевіряємо батька/матір на сильний збіг з чужими деревами і, якщо знайдено,
-    // автоматично копіюємо їхню гілку (предків, братів/сестер) — без підтвердження.
-    try {
-      const freshMine = await getPeopleOnce(user.uid);
-      await tryAutoAdopt(user.uid, freshMine, result.fatherId, result.motherId);
-    } catch (e) {
-      // Автоприєднання не критичне — тихо ігноруємо помилку, щоб не заважати користувачу
-    }
+    // Перша механіка з ТЗ: одразу після заповнення майстра перевіряємо збіги і,
+    // якщо знайдено, автопошук (наступний useEffect) сам створить пропозицію
+    // об'єднання — користувач побачить її у вкладці "Спільні родичі" з підтвердженням.
   };
 
   if (showOnboarding) {
@@ -159,33 +133,14 @@ export default function App() {
     );
   }
 
-  // people вже містить усіх спільних людей (через spaceMembers) — це і є повне дерево,
-  // живе й редаговане обома сторонами. Окремий "обʼєднаний перегляд" більше не потрібен.
-  const displayPeople = people;
-  // "Спільний" маркер лишається для linkedTo — людей, підтверджених як "одна й та ж особа"
-  // між РІЗНИМИ (не обʼєднаними в простір) деревами.
   const sharedIds = new Set(
-    Object.values(displayPeople).filter((p) => (p.linkedTo || []).length > 0).map((p) => p.id)
+    Object.values(people).filter((p) => (p.linkedTo || []).length > 0).map((p) => p.id)
   );
 
   const openNew = () => { setEditing(null); setPrefill(null); setShowModal(true); };
+  const openPerson = (p) => { setEditing(p); setPrefill(null); setShowModal(true); };
 
-  // displayPeople === people, тож будь-яка картка, яку видно, вже редагована напряму.
-  const resolveMine = (p) => people[p.id] || null;
-
-  const openPerson = (p) => {
-    const mine = resolveMine(p);
-    if (!mine) {
-      alert('Цей родич веде з іншого дерева — редагувати його може лише той користувач, у кого він доданий.');
-      return;
-    }
-    setEditing(mine); setPrefill(null); setShowModal(true);
-  };
-
-  // "Нова людина": відкриваємо форму з уже проставленим зв'язком-префілом (завжди відносно МОГО запису)
-  const addNewRelated = (relation, mergedPerson) => {
-    const person = resolveMine(mergedPerson);
-    if (!person) { alert('Можна додавати родичів лише до своїх записів.'); return; }
+  const addNewRelated = (relation, person) => {
     setEditing(null);
     if (relation === 'father') {
       setPrefill({ gender: 'm', childIds: [person.id] });
@@ -200,10 +155,7 @@ export default function App() {
     setShowModal(true);
   };
 
-  // "Обрати з наявних": напряму пов'язуємо двох людей у МОЄМУ дереві, без відкриття форми
-  const linkExisting = async (relation, existingId, mergedPerson) => {
-    const person = resolveMine(mergedPerson);
-    if (!person) { alert('Можна додавати родичів лише до своїх записів.'); return; }
+  const linkExisting = async (relation, existingId, person) => {
     const fresh = people;
     if (relation === 'father' || relation === 'mother') {
       await linkParentChild(existingId, person.id, fresh);
@@ -218,14 +170,6 @@ export default function App() {
     }
   };
 
-  // Поточний спільний простір: усі uid, що вже мають доступ до редагування моїх людей.
-  // Якщо дерево порожнє (новий користувач) — простір це просто я сам.
-  const mySpaceMembers = () => {
-    const set = new Set([user.uid]);
-    Object.values(people).forEach((p) => (p.spaceMembers || []).forEach((m) => set.add(m)));
-    return Array.from(set);
-  };
-
   const save = async (form) => {
     if (form.id) {
       const { id, ...patch } = form;
@@ -233,12 +177,10 @@ export default function App() {
       const fresh = { ...people, [id]: form };
       for (const pid of form.parentIds || []) await linkParentChild(pid, id, fresh);
     } else {
-      const newId = await addPerson(user.uid, { ...form, createdByName: profile.displayName }, user.uid, mySpaceMembers());
+      const newId = await addPerson(space.id, form, user.uid, profile.displayName);
       const fresh = { ...people, [newId]: { ...form, id: newId } };
       for (const pid of form.parentIds || []) await linkParentChild(pid, newId, fresh);
-      // Якщо додавали як батька/матір комусь (childIds у префілі)
       for (const cid of form.childIds || []) await linkParentChild(newId, cid, fresh);
-      // Якщо додавали як партнера — зв'язок двосторонній
       for (const sid of form.spouseIds || []) {
         const other = people[sid];
         if (other) {
@@ -251,13 +193,12 @@ export default function App() {
   };
 
   const remove = async (id) => {
-    if (!confirm('Видалити цього родича?')) return;
-    await deletePerson(id);
+    if (!confirm('Видалити цього родича? Усі звʼязки з іншими людьми (батьки, діти, партнер) теж буде очищено.')) return;
+    await deletePerson(id, space.id);
     setShowModal(false);
   };
 
   const proposalCount = proposals.length;
-  const accessCount = incomingAccess.length;
 
   return (
     <div>
@@ -284,7 +225,6 @@ export default function App() {
         </button>
         <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>
           Налаштування
-          {accessCount > 0 && <span className="badge">{accessCount}</span>}
         </button>
       </nav>
 
@@ -298,25 +238,21 @@ export default function App() {
                 <button className={view === 'explorer' ? 'active' : ''} onClick={() => setView('explorer')}>Провідник</button>
               </div>
               <div className="header-spacer" />
-              <span className="person-meta">{Object.keys(displayPeople).length} родичів</span>
+              <span className="person-meta">{Object.keys(people).length} родичів</span>
             </div>
 
-            {view === 'tree' && <TreeView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} onAddPerson={openNew} mode="tree" />}
-            {view === 'list' && <ListView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} />}
-            {view === 'explorer' && <ExplorerView people={displayPeople} sharedIds={sharedIds} onOpen={openPerson} />}
+            {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} onAddPerson={openNew} mode="tree" />}
+            {view === 'list' && <ListView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
+            {view === 'explorer' && <ExplorerView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
           </div>
         )}
 
         {tab === 'matches' && (
-          <MatchesPanel uid={user.uid} profile={profile} myPeople={people} proposals={proposals} />
+          <MatchesPanel uid={user.uid} profile={profile} space={space} myPeople={people} proposals={proposals} />
         )}
 
         {tab === 'settings' && (
-          <SettingsPanel
-            profile={profile} uid={user.uid}
-            incomingAccess={incomingAccess} grants={grants} myAccess={myAccess}
-            myPeople={people}
-          />
+          <SettingsPanel profile={profile} uid={user.uid} space={space} />
         )}
       </main>
 

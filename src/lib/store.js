@@ -1,8 +1,25 @@
 import {
   collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
-  query, where, onSnapshot, serverTimestamp, addDoc,
+  query, where, onSnapshot, serverTimestamp, addDoc, arrayUnion, arrayRemove,
 } from 'firebase/firestore';
 import { db } from '../firebase.js';
+import { findMatches } from './matching.js';
+
+// =====================================================================================
+// МОДЕЛЬ: "Family Space" (спільний простір)
+// =====================================================================================
+// Кожна людина (документ у /people) належить РІВНО ОДНОМУ простору через поле spaceId.
+// Простір — документ у /familySpaces: { members: [uid, uid, ...] }.
+// Право редагувати людину = мій uid є в members того простору, якому вона належить.
+//
+// Це замінює попередній підхід (масив spaceMembers на кожному документі людини), бо:
+//  - об'єднання/вихід — це ОДНА зміна одного документа простору, а не сотні updateDoc;
+//  - Firestore Rules можуть перевірити належність через єдиний get(), без вразливих
+//    масових операцій, які частково падали через права доступу.
+//
+// linkedTo лишається ОКРЕМИМ поняттям: це позначка "ця персона з іншого простору —
+// та сама людина, що й ця" (для показу "спільний родич"), і не впливає на права редагування.
+// =====================================================================================
 
 // ---- Профіль користувача ----
 export async function ensureUserProfile(user) {
@@ -19,7 +36,9 @@ export async function ensureUserProfile(user) {
       createdAt: serverTimestamp(),
     });
   }
-  return (await getDoc(ref)).data();
+  const spaceId = await ensureOwnSpace(user.uid);
+  const profile = (await getDoc(ref)).data();
+  return { ...profile, spaceId };
 }
 
 export async function updateUserSettings(uid, patch) {
@@ -31,13 +50,49 @@ export async function getUserProfile(uid) {
   return snap.exists() ? snap.data() : null;
 }
 
+// ---- Family Spaces ----
+export async function ensureOwnSpace(uid) {
+  const existing = await getDocs(query(collection(db, 'familySpaces'), where('members', 'array-contains', uid)));
+  if (!existing.empty) return existing.docs[0].id;
+  const ref = await addDoc(collection(db, 'familySpaces'), {
+    members: [uid],
+    createdAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export function watchMySpace(uid, cb) {
+  const q = query(collection(db, 'familySpaces'), where('members', 'array-contains', uid));
+  return onSnapshot(q, async (snap) => {
+    if (snap.empty) { cb(null); return; }
+    if (snap.size === 1) {
+      const d = snap.docs[0];
+      cb({ id: d.id, ...d.data() });
+      return;
+    }
+    // Перехідний стан (щойно відбулось обʼєднання): я числюсь у кількох просторах.
+    // Знаходимо той, де реально є люди — це і є актуальний; запускаємо фонову очистку
+    // порожніх дублікатів (не чекаючи результату, щоб не затримувати відображення).
+    cleanupEmptyMergedSpaces(uid).catch(() => {});
+    for (const d of snap.docs) {
+      const peopleSnap = await getDocs(query(collection(db, 'people'), where('spaceId', '==', d.id)));
+      if (!peopleSnap.empty) { cb({ id: d.id, ...d.data() }); return; }
+    }
+    // Усі порожні (щойно щойно щойно) — беремо перший, очистка невдовзі приведе до норми
+    const d = snap.docs[0];
+    cb({ id: d.id, ...d.data() });
+  });
+}
+
+export async function getSpace(spaceId) {
+  const snap = await getDoc(doc(db, 'familySpaces', spaceId));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
 // ---- Люди (родичі) ----
-// Кожна людина належить простору спільного редагування: spaceMembers — масив uid,
-// хто може редагувати. Спочатку це лише сам власник [ownerId]; коли двоє дають доступ
-// одне одному (взаємний grant), обидва додаються в spaceMembers усіх існуючих записів
-// з обох боків — і відтоді це справді один спільний родовід на двох.
-export function watchPeople(uid, cb) {
-  const q = query(collection(db, 'people'), where('spaceMembers', 'array-contains', uid));
+export function watchPeople(spaceId, cb) {
+  if (!spaceId) { cb({}); return () => {}; }
+  const q = query(collection(db, 'people'), where('spaceId', '==', spaceId));
   return onSnapshot(q, (snap) => {
     const people = {};
     snap.forEach((d) => { people[d.id] = { id: d.id, ...d.data() }; });
@@ -45,47 +100,18 @@ export function watchPeople(uid, cb) {
   });
 }
 
-export async function getPeopleOnce(uid) {
-  const q = query(collection(db, 'people'), where('spaceMembers', 'array-contains', uid));
+export async function getPeopleOnce(spaceId) {
+  if (!spaceId) return {};
+  const q = query(collection(db, 'people'), where('spaceId', '==', spaceId));
   const snap = await getDocs(q);
   const people = {};
   snap.forEach((d) => { people[d.id] = { id: d.id, ...d.data() }; });
   return people;
 }
 
-// Читає дерево за ORIGINAL creator (ownerId), незалежно від spaceMembers —
-// використовується лише для автопошуку збігів/сканування чужих дерев,
-// де нам потрібні саме "їхні" дані для порівняння, а не спільний простір.
-export async function getPeopleByCreator(ownerId) {
-  const q = query(collection(db, 'people'), where('ownerId', '==', ownerId));
-  const snap = await getDocs(q);
-  const people = {};
-  snap.forEach((d) => { people[d.id] = { id: d.id, ...d.data() }; });
-  return people;
-}
-
-// Міграція: старі записи (створені до появи spaceMembers) мають лише ownerId.
-// Одноразово при вході проставляємо їм spaceMembers = [ownerId], інакше вони
-// зникнуть із запиту array-contains. Безпечно викликати повторно — пропускає вже мігровані.
-export async function migrateLegacyPeople(uid) {
-  const q = query(collection(db, 'people'), where('ownerId', '==', uid));
-  const snap = await getDocs(q);
-  const updates = [];
-  snap.forEach((d) => {
-    const data = d.data();
-    if (!data.spaceMembers || data.spaceMembers.length === 0) {
-      updates.push(updateDoc(d.ref, { spaceMembers: [uid] }));
-    }
-  });
-  if (updates.length) await Promise.all(updates);
-}
-
-export async function addPerson(ownerId, person, actingUid, spaceMembers) {
-  const creator = actingUid || ownerId;
-  const members = spaceMembers && spaceMembers.length ? Array.from(new Set(spaceMembers)) : [ownerId];
+export async function addPerson(spaceId, person, actingUid, actingName) {
   const ref = await addDoc(collection(db, 'people'), {
-    ownerId,
-    spaceMembers: members,
+    spaceId,
     firstName: person.firstName || '',
     lastName: person.lastName || '',
     maidenName: person.maidenName || '',
@@ -102,52 +128,14 @@ export async function addPerson(ownerId, person, actingUid, spaceMembers) {
     childIds: person.childIds || [],
     spouseIds: person.spouseIds || [],
     linkedTo: person.linkedTo || [],
-    createdBy: creator,
-    createdByName: person.createdByName || '',
-    lastEditedBy: creator,
-    lastEditedByName: person.createdByName || '',
+    createdBy: actingUid || '',
+    createdByName: actingName || '',
+    lastEditedBy: actingUid || '',
+    lastEditedByName: actingName || '',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
   return ref.id;
-}
-
-// Пакетне збереження результату онбордингу: створює всіх людей і зв'язки за один прохід.
-export async function saveOnboarding(ownerId, data) {
-  const { me, father, mother, partner, children } = data;
-  const meId = await addPerson(ownerId, { ...me, isSelf: true });
-
-  let fatherId = null, motherId = null;
-  const parentIds = [];
-  if (father) { fatherId = await addPerson(ownerId, father); parentIds.push(fatherId); }
-  if (mother) { motherId = await addPerson(ownerId, mother); parentIds.push(motherId); }
-
-  let partnerId = null;
-  if (partner) partnerId = await addPerson(ownerId, partner);
-
-  const childIds = [];
-  for (const ch of children || []) childIds.push(await addPerson(ownerId, ch));
-
-  // Зв'язки для "я": батьки зверху, діти знизу, партнер збоку
-  await updatePerson(meId, {
-    parentIds,
-    childIds,
-    spouseIds: partnerId ? [partnerId] : [],
-  });
-
-  // Зворотні зв'язки
-  for (const pid of parentIds) {
-    await updatePerson(pid, { childIds: [meId] });
-  }
-  if (partnerId) {
-    await updatePerson(partnerId, { spouseIds: [meId], childIds });
-  }
-  for (const cid of childIds) {
-    const cParents = partnerId ? [meId, partnerId] : [meId];
-    await updatePerson(cid, { parentIds: cParents });
-  }
-
-  return { meId, fatherId, motherId, partnerId, childIds };
 }
 
 export async function updatePerson(personId, patch, actingUid, actingName) {
@@ -159,7 +147,29 @@ export async function updatePerson(personId, patch, actingUid, actingName) {
   await updateDoc(doc(db, 'people', personId), fullPatch);
 }
 
-export async function deletePerson(personId) {
+// Видаляє людину І очищує всі посилання на неї в інших людей того ж простору.
+export async function deletePerson(personId, spaceId) {
+  const people = await getPeopleOnce(spaceId);
+  const updates = [];
+  Object.values(people).forEach((p) => {
+    if (p.id === personId) return;
+    let changed = false;
+    const patch = {};
+    if ((p.parentIds || []).includes(personId)) {
+      patch.parentIds = p.parentIds.filter((id) => id !== personId);
+      changed = true;
+    }
+    if ((p.childIds || []).includes(personId)) {
+      patch.childIds = p.childIds.filter((id) => id !== personId);
+      changed = true;
+    }
+    if ((p.spouseIds || []).includes(personId)) {
+      patch.spouseIds = p.spouseIds.filter((id) => id !== personId);
+      changed = true;
+    }
+    if (changed) updates.push(updateDoc(doc(db, 'people', p.id), patch));
+  });
+  await Promise.all(updates);
   await deleteDoc(doc(db, 'people', personId));
 }
 
@@ -178,28 +188,70 @@ export async function unlinkParentChild(parentId, childId, people) {
   const parent = people[parentId];
   const child = people[childId];
   if (parent) {
-    await updatePerson(parentId, {
-      childIds: (parent.childIds || []).filter((id) => id !== childId),
-    });
+    await updatePerson(parentId, { childIds: (parent.childIds || []).filter((id) => id !== childId) });
   }
   if (child) {
-    await updatePerson(childId, {
-      parentIds: (child.parentIds || []).filter((id) => id !== parentId),
-    });
+    await updatePerson(childId, { parentIds: (child.parentIds || []).filter((id) => id !== parentId) });
   }
 }
 
-// ---- Запити доступу до дерева ----
-export async function requestAccess(fromUid, fromName, toUid) {
-  await addDoc(collection(db, 'accessRequests'), {
-    fromUid, fromName, toUid, status: 'pending', createdAt: serverTimestamp(),
+// =====================================================================================
+// ПОШУК ЗБІГІВ І ПРОПОЗИЦІЇ ОБ'ЄДНАННЯ ПРОСТОРІВ
+// =====================================================================================
+export async function getAllUsersForScan() {
+  const snap = await getDocs(collection(db, 'users'));
+  const list = [];
+  snap.forEach((d) => list.push(d.data()));
+  return list;
+}
+
+export async function scanForSpaceMatches(mySpaceId, myPeople) {
+  const allSpacesSnap = await getDocs(collection(db, 'familySpaces'));
+  const results = [];
+  for (const spaceDoc of allSpacesSnap.docs) {
+    if (spaceDoc.id === mySpaceId) continue;
+    const theirPeople = await getPeopleOnce(spaceDoc.id);
+    if (Object.keys(theirPeople).length === 0) continue;
+    const matches = findMatches(myPeople, theirPeople);
+    if (matches.length > 0) {
+      results.push({ theirSpaceId: spaceDoc.id, theirMembers: spaceDoc.data().members || [], matches });
+    }
+  }
+  return results;
+}
+
+export async function spaceMergeProposalExists(spaceA, spaceB) {
+  const q1 = query(
+    collection(db, 'spaceMergeProposals'),
+    where('fromSpaceId', '==', spaceA), where('toSpaceId', '==', spaceB), where('status', '==', 'pending'),
+  );
+  const q2 = query(
+    collection(db, 'spaceMergeProposals'),
+    where('fromSpaceId', '==', spaceB), where('toSpaceId', '==', spaceA), where('status', '==', 'pending'),
+  );
+  const [s1, s2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+  return !s1.empty || !s2.empty;
+}
+
+export async function createSpaceMergeProposal({ fromSpaceId, fromUid, fromName, toSpaceId, matches }) {
+  const matchSummary = matches.map((m) => ({
+    mineId: m.mineId, theirId: m.theirId, reasons: m.reasons,
+    mineName: `${m.mine.firstName} ${m.mine.lastName || ''}`.trim(),
+    theirName: `${m.theirs.firstName} ${m.theirs.lastName || ''}`.trim(),
+  }));
+  await addDoc(collection(db, 'spaceMergeProposals'), {
+    fromSpaceId, fromUid, fromName, toSpaceId,
+    matches: matchSummary,
+    status: 'pending',
+    createdAt: serverTimestamp(),
   });
 }
 
-export function watchIncomingAccess(uid, cb) {
+export function watchIncomingSpaceMergeProposals(mySpaceId, cb) {
+  if (!mySpaceId) { cb([]); return () => {}; }
   const q = query(
-    collection(db, 'accessRequests'),
-    where('toUid', '==', uid),
+    collection(db, 'spaceMergeProposals'),
+    where('toSpaceId', '==', mySpaceId),
     where('status', '==', 'pending'),
   );
   return onSnapshot(q, (snap) => {
@@ -209,181 +261,8 @@ export function watchIncomingAccess(uid, cb) {
   });
 }
 
-export async function respondAccess(requestId, status) {
-  await updateDoc(doc(db, 'accessRequests', requestId), { status });
-}
-
-// Кому я надав доступ (grants)
-export function watchGrants(uid, cb) {
-  const q = query(collection(db, 'grants'), where('ownerId', '==', uid));
-  return onSnapshot(q, (snap) => {
-    const list = [];
-    snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-    cb(list);
-  });
-}
-
-export async function grantAccess(ownerId, granteeUid, granteeName) {
-  // Детермінований ID, щоб правила Firestore могли перевіряти доступ через exists()
-  const id = `${ownerId}_${granteeUid}`;
-  await setDoc(doc(db, 'grants', id), {
-    ownerId, granteeUid, granteeName, createdAt: serverTimestamp(),
-  });
-
-  // Перевіряємо, чи це взаємний доступ (зустрічний grant granteeUid -> ownerId вже існує).
-  // Якщо так — я (ownerId, той, хто щойно натиснув) можу відразу додати другу сторону
-  // у spaceMembers СВОЇХ документів (це дозволено правилами). Друга сторона довиконає
-  // свою частину автоматично при наступному вході (watchPendingMutualMerges).
-  const reverseId = `${granteeUid}_${ownerId}`;
-  const reverseSnap = await getDoc(doc(db, 'grants', reverseId));
-  if (reverseSnap.exists()) {
-    await mergeMySide(ownerId, granteeUid);
-  }
-}
-
-// Зливає простори редагування двох користувачів: усі їхні існуючі записи людей
-// стають доступними для редагування ОБОМ (spaceMembers розширюється на обидва uid).
-// Викликається лише після підтвердженого взаємного доступу (grant в обидва боки).
-// Обʼєднання просторів — ДВОФАЗНЕ, бо кожен може редагувати лише СВОЇ документи
-// (правила безпеки). Коли доступ стає взаємним, кожна сторона (при вході в застосунок)
-// додає іншого в spaceMembers СВОЇХ ЖЕ записів. Коли обидва це зробили — усі документи
-// з обох боків мають одне одного в spaceMembers, і дерево справді спільне.
-// mergeMySide викликається для АВТЕНТИФІКОВАНОГО користувача uid, додає otherUid
-// у spaceMembers усіх документів, де uid є ownerId (або вже учасником).
-export async function mergeMySide(uid, otherUid) {
-  const snap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', uid)));
-  const results = [];
-  for (const d of snap.docs) {
-    const data = d.data();
-    const members = data.spaceMembers || [];
-    if (members.includes(otherUid)) continue; // вже додано
-    try {
-      await updateDoc(d.ref, { spaceMembers: Array.from(new Set([...members, otherUid])) });
-      results.push({ id: d.id, ok: true });
-    } catch (e) {
-      results.push({ id: d.id, ok: false, error: e.message, ownerId: data.ownerId, members });
-    }
-  }
-  const failed = results.filter((r) => !r.ok);
-  if (failed.length) {
-    console.error('mergeMySide: не вдалось оновити', failed);
-  }
-}
-
-// Чи є взаємний grant між двома uid (обидва боки дозволили одне одному).
-export async function hasMutualGrant(uidA, uidB) {
-  const [a, b] = await Promise.all([
-    getDoc(doc(db, 'grants', `${uidA}_${uidB}`)),
-    getDoc(doc(db, 'grants', `${uidB}_${uidA}`)),
-  ]);
-  return a.exists() && b.exists();
-}
-
-// Список usersUid, з якими в мене взаємний grant, але моя сторона злиття ще не виконана
-// (є хоч один мій документ без otherUid у spaceMembers) — використовується, щоб при вході
-// довиконати свою частину mergeMySide автоматично.
-export async function getPendingMutualMerges(uid) {
-  const grantsToMe = await getDocs(query(collection(db, 'grants'), where('granteeUid', '==', uid)));
-  const grantsFromMe = await getDocs(query(collection(db, 'grants'), where('ownerId', '==', uid)));
-  const toMeOwners = new Set();
-  grantsToMe.forEach((d) => toMeOwners.add(d.data().ownerId));
-  const fromMeGrantees = new Set();
-  grantsFromMe.forEach((d) => fromMeGrantees.add(d.data().granteeUid));
-  const mutual = [...toMeOwners].filter((o) => fromMeGrantees.has(o));
-  return mutual;
-}
-
-// При вході: перевіряє всі взаємні гранти і довиконує МОЮ частину злиття для кожного
-// (додає otherUid у spaceMembers моїх документів, якщо ще не додано). Безпечно викликати
-// повторно — mergeMySide сам пропускає вже оновлені документи.
-export async function completePendingMerges(uid) {
-  const mutualUids = await getPendingMutualMerges(uid);
-  for (const otherUid of mutualUids) {
-    await mergeMySide(uid, otherUid);
-  }
-  return mutualUids;
-}
-
-// Список користувачів (uid), з якими я зараз у спільному просторі редагування —
-// обчислюється з моїх власних людей (унікальні spaceMembers мінус я сам).
-export function getSpaceCoMembers(myUid, myPeople) {
-  const set = new Set();
-  Object.values(myPeople).forEach((p) => {
-    (p.spaceMembers || []).forEach((m) => { if (m !== myUid) set.add(m); });
-  });
-  return Array.from(set);
-}
-
-// Розриває спільний простір між мною (myUid) та іншим користувачем (otherUid), З МОГО БОКУ.
-// За правилами безпеки я можу редагувати лише документи, де Я сам є в spaceMembers —
-// тому чіпаю лише ту частину простору, яку бачу я. Обидві сторони мають натиснути
-// "Розірвати" зі свого акаунту, щоб повністю розділити дерева (симетрично до підтвердження пропозицій).
-export async function leaveSharedSpace(myUid, otherUid) {
-  const mySnap = await getDocs(query(collection(db, 'people'), where('spaceMembers', 'array-contains', myUid)));
-
-  const results = [];
-  for (const d of mySnap.docs) {
-    const data = d.data();
-    const members = data.spaceMembers || [];
-    if (!members.includes(otherUid)) continue; // не спільний з otherUid — не чіпаємо
-    const newMembers = data.ownerId === myUid
-      ? members.filter((m) => m !== otherUid)
-      : members.filter((m) => m !== myUid);
-    try {
-      await updateDoc(d.ref, { spaceMembers: newMembers });
-      results.push({ id: d.id, ok: true });
-    } catch (e) {
-      results.push({ id: d.id, ok: false, error: e.message, ownerId: data.ownerId, members });
-    }
-  }
-
-  const failed = results.filter((r) => !r.ok);
-  if (failed.length) {
-    console.error('leaveSharedSpace: не вдалось оновити', failed);
-  }
-
-  // Прибираю МІЙ бік grant (правила дозволяють видаляти запис, де я ownerId або granteeUid)
-  await deleteDoc(doc(db, 'grants', `${myUid}_${otherUid}`)).catch((e) => console.warn('grant1:', e.message));
-  await deleteDoc(doc(db, 'grants', `${otherUid}_${myUid}`)).catch((e) => console.warn('grant2:', e.message));
-
-  if (failed.length) {
-    throw new Error(`Не вдалось оновити ${failed.length} записів: ${failed[0].error}`);
-  }
-}
-
-export async function revokeGrant(grantId) {
-  await deleteDoc(doc(db, 'grants', grantId));
-}
-
-// Дерева, до яких я маю доступ (я grantee)
-export function watchMyAccess(uid, cb) {
-  const q = query(collection(db, 'grants'), where('granteeUid', '==', uid));
-  return onSnapshot(q, (snap) => {
-    const list = [];
-    snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-    cb(list);
-  });
-}
-
-// ---- Пропозиції об'єднання / правок ----
-// type: 'link' — пропозиція, що дві персони (mine/theirs) — одна й та ж людина.
-export async function createMergeProposal(proposal) {
-  await addDoc(collection(db, 'mergeProposals'), {
-    ...proposal, status: 'pending', createdAt: serverTimestamp(),
-  });
-}
-
-export function watchProposals(uid, cb) {
-  const q = query(
-    collection(db, 'mergeProposals'),
-    where('respondentUid', '==', uid),
-    where('status', '==', 'pending'),
-  );
-  return onSnapshot(q, (snap) => {
-    const list = [];
-    snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-    cb(list);
-  });
+export async function rejectSpaceMergeProposal(proposalId) {
+  await updateDoc(doc(db, 'spaceMergeProposals', proposalId), { status: 'rejected' });
 }
 
 const FILLABLE_FIELDS = [
@@ -391,120 +270,206 @@ const FILLABLE_FIELDS = [
   'deathDate', 'deathPlace', 'bio', 'photoURL',
 ];
 
-// Доповнює порожні поля моєї персони даними з іншої сторони (якщо там вони є).
-// Не перезаписує те, що вже заповнено — лише додає відсутнє.
-function fillMissingFields(mine, theirs) {
-  const patch = {};
-  FILLABLE_FIELDS.forEach((f) => {
-    if (!mine[f] && theirs[f]) patch[f] = theirs[f];
-  });
-  return patch;
-}
+// Приймає пропозицію (викликає учасник TOSPACE — той, кому її адресовано).
+// Переносить усіх людей fromSpace у toSpace (з перекладом id для збіжних), додає
+// учасників fromSpace у members toSpace. Старий fromSpace лишається існувати —
+// його колишні учасники самі приберуть себе з нього при наступному завантаженні
+// (finishLeavingOldSpace), бо лише вони мають право редагувати той документ.
+export async function acceptSpaceMergeProposal(proposal) {
+  const { fromSpaceId, toSpaceId, matches } = proposal;
 
-// Підтвердження пропозиції. КОЖЕН користувач може писати лише у свій документ (правила безпеки),
-// тому respondent (той, хто підтверджує) оновлює linkedTo лише на СВОЇЙ персоні (theirPersonId —
-// це ID у дереві респондента). Ініціатор, коли сам погоджується на власну пропозицію, або коли
-// побачить, що respondent прийняв — оновлює linkedTo на своїй персоні окремим викликом.
-// Простіше: приймаючи, respondent одразу оновлює свою персону І позначає пропозицію 'accepted'.
-// Клієнт ІНІЦІАТОРА, побачивши статус 'accepted' на своїй пропозиції, довзвʼязує свою сторону.
-// Обидві сторони також доповнюють власні порожні поля даними іншої сторони (якщо ті відомі).
-export async function acceptProposal(pr, myUid) {
-  // myUid — це той, хто зараз підтверджує (завжди pr.respondentUid у нашому UI)
-  const isRespondent = myUid === pr.respondentUid;
-  const myPersonId = isRespondent ? pr.theirPersonId : pr.minePersonId;
-  const otherUid = isRespondent ? pr.initiatorUid : pr.respondentUid;
-  const otherPersonId = isRespondent ? pr.minePersonId : pr.theirPersonId;
-
-  const [mySnap, otherSnap] = await Promise.all([
-    getDoc(doc(db, 'people', myPersonId)),
-    getDoc(doc(db, 'people', otherPersonId)),
+  const [fromPeople, toPeople, fromSpaceSnap] = await Promise.all([
+    getPeopleOnce(fromSpaceId),
+    getPeopleOnce(toSpaceId),
+    getDoc(doc(db, 'familySpaces', fromSpaceId)),
   ]);
-  if (!mySnap.exists()) throw new Error('Персону не знайдено — можливо, її вже видалили.');
-  const mine = mySnap.data();
-  const theirs = otherSnap.exists() ? otherSnap.data() : {};
+  const fromMembers = fromSpaceSnap.exists() ? (fromSpaceSnap.data().members || []) : [];
 
-  const merged = Array.from(
-    new Map([...(mine.linkedTo || []), { ownerId: otherUid, personId: otherPersonId }]
-      .map((l) => [l.ownerId + '_' + l.personId, l])).values()
-  );
-  const fillPatch = fillMissingFields(mine, theirs);
+  const matchedFromIds = new Set((matches || []).map((m) => m.theirId));
+  const updates = [];
 
-  await updateDoc(doc(db, 'people', myPersonId), { linkedTo: merged, ...fillPatch });
-  await updateDoc(doc(db, 'mergeProposals', pr.id), {
-    status: 'accepted',
-    [isRespondent ? 'respondentAccepted' : 'initiatorAccepted']: true,
-  });
-}
-
-// Викликається клієнтом ІНІЦІАТОРА, коли він бачить, що його власна пропозиція отримала
-// статус 'accepted' від респондента, але його сторона ще не зв'язана.
-export async function completeInitiatorSide(pr) {
-  const [mySnap, otherSnap] = await Promise.all([
-    getDoc(doc(db, 'people', pr.minePersonId)),
-    getDoc(doc(db, 'people', pr.theirPersonId)),
-  ]);
-  if (!mySnap.exists()) return;
-  const mine = mySnap.data();
-  const already = (mine.linkedTo || []).some(
-    (l) => l.ownerId === pr.respondentUid && l.personId === pr.theirPersonId
-  );
-  if (already) return;
-  const theirs = otherSnap.exists() ? otherSnap.data() : {};
-  const merged = Array.from(
-    new Map([...(mine.linkedTo || []), { ownerId: pr.respondentUid, personId: pr.theirPersonId }]
-      .map((l) => [l.ownerId + '_' + l.personId, l])).values()
-  );
-  const fillPatch = fillMissingFields(mine, theirs);
-  await updateDoc(doc(db, 'people', pr.minePersonId), { linkedTo: merged, ...fillPatch });
-}
-
-// Пропозиції, які Я ініціював і respondent вже підтвердив, але моя сторона ще не звʼязана.
-export function watchMyAcceptedProposalsToComplete(uid, cb) {
-  const q = query(
-    collection(db, 'mergeProposals'),
-    where('initiatorUid', '==', uid),
-    where('status', '==', 'accepted'),
-  );
-  return onSnapshot(q, (snap) => {
-    const list = [];
-    snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-    cb(list);
-  });
-}
-
-export async function rejectProposal(proposalId) {
-  await updateDoc(doc(db, 'mergeProposals', proposalId), { status: 'rejected' });
-}
-
-// Розірвати вже підтверджене об'єднання конкретної людини (якщо збіг був помилковим).
-export async function unlinkPersons(ownerIdA, personIdA, ownerIdB, personIdB) {
-  const refA = doc(db, 'people', personIdA);
-  const refB = doc(db, 'people', personIdB);
-  const [snapA, snapB] = await Promise.all([getDoc(refA), getDoc(refB)]);
-  if (snapA.exists()) {
-    const linked = (snapA.data().linkedTo || []).filter(
-      (l) => !(l.ownerId === ownerIdB && l.personId === personIdB)
+  (matches || []).forEach((m) => {
+    const mine = toPeople[m.mineId];
+    const theirs = fromPeople[m.theirId];
+    if (!mine || !theirs) return;
+    const patch = {};
+    FILLABLE_FIELDS.forEach((f) => { if (!mine[f] && theirs[f]) patch[f] = theirs[f]; });
+    const linkedTo = Array.from(
+      new Map([...(mine.linkedTo || []), { spaceId: fromSpaceId, personId: m.theirId }]
+        .map((l) => [l.spaceId + '_' + l.personId, l])).values()
     );
-    await updateDoc(refA, { linkedTo: linked });
-  }
-  if (snapB.exists()) {
-    const linked = (snapB.data().linkedTo || []).filter(
-      (l) => !(l.ownerId === ownerIdA && l.personId === personIdA)
-    );
-    await updateDoc(refB, { linkedTo: linked });
+    patch.linkedTo = linkedTo;
+    updates.push(updateDoc(doc(db, 'people', m.mineId), patch));
+  });
+
+  const idMap = {};
+  (matches || []).forEach((m) => { idMap[m.theirId] = m.mineId; });
+  Object.values(fromPeople).forEach((p) => {
+    if (matchedFromIds.has(p.id)) return;
+    idMap[p.id] = p.id;
+  });
+
+  Object.values(fromPeople).forEach((p) => {
+    if (matchedFromIds.has(p.id)) return;
+    const remap = (ids) => (ids || []).map((id) => idMap[id] || id).filter(Boolean);
+    updates.push(updateDoc(doc(db, 'people', p.id), {
+      spaceId: toSpaceId,
+      parentIds: remap(p.parentIds),
+      childIds: remap(p.childIds),
+      spouseIds: remap(p.spouseIds),
+    }));
+  });
+
+  (matches || []).forEach((m) => {
+    const theirs = fromPeople[m.theirId];
+    const mine = toPeople[m.mineId];
+    if (!theirs || !mine) return;
+    const remap = (ids) => (ids || []).map((id) => idMap[id] || id).filter(Boolean);
+    const mergedParents = Array.from(new Set([...(mine.parentIds || []), ...remap(theirs.parentIds)])).slice(0, 2);
+    const mergedChildren = Array.from(new Set([...(mine.childIds || []), ...remap(theirs.childIds)]));
+    const mergedSpouses = Array.from(new Set([...(mine.spouseIds || []), ...remap(theirs.spouseIds)]));
+    updates.push(updateDoc(doc(db, 'people', m.mineId), {
+      parentIds: mergedParents, childIds: mergedChildren, spouseIds: mergedSpouses,
+    }));
+  });
+
+  await Promise.all(updates);
+
+  await updateDoc(doc(db, 'familySpaces', toSpaceId), {
+    members: arrayUnion(...fromMembers),
+  });
+  // fromSpace лишається існувати з усіма своїми колишніми members, але БЕЗ жодної
+  // людини (усі перенесені). Кожен його колишній учасник, відкривши застосунок,
+  // сам побачить (watchMySpace знайде і toSpace, і порожній fromSpace) і викличе
+  // finishLeavingOldSpace, щоб прибрати себе з fromSpace.members остаточно.
+  await updateDoc(doc(db, 'spaceMergeProposals', proposal.id), { status: 'accepted' });
+}
+
+// Довершення з боку КОЛИШНЬОГО учасника fromSpace: якщо він тепер в toSpace (є в його
+// members) і fromSpace уже порожній (усі люди перенесені) — прибирає себе з fromSpace.
+// Безпечно викликати завжди при вході: якщо нема застарілих порожніх просторів — нічого не робить.
+export async function cleanupEmptyMergedSpaces(myUid) {
+  const mySpacesSnap = await getDocs(query(collection(db, 'familySpaces'), where('members', 'array-contains', myUid)));
+  if (mySpacesSnap.size <= 1) return; // немає дублікатів — нічого прибирати
+
+  for (const spaceDoc of mySpacesSnap.docs) {
+    const peopleSnap = await getDocs(query(collection(db, 'people'), where('spaceId', '==', spaceDoc.id)));
+    if (peopleSnap.empty) {
+      // Цей простір порожній для мене (усі люди вже деінде) — виходжу з нього.
+      await updateDoc(doc(db, 'familySpaces', spaceDoc.id), { members: arrayRemove(myUid) }).catch(() => {});
+    }
   }
 }
 
-// Усі підтверджені об'єднання, де я є однією зі сторін (для показу в Налаштуваннях).
-export async function getMyLinks(uid) {
-  const myPeople = await getPeopleOnce(uid);
-  const links = [];
-  Object.values(myPeople).forEach((p) => {
-    (p.linkedTo || []).forEach((l) => {
-      links.push({ myPersonId: p.id, myPerson: p, otherOwnerId: l.ownerId, otherPersonId: l.personId });
-    });
+// =====================================================================================
+// ВИХІД ЗІ СПІЛЬНОГО ПРОСТОРУ ПО КРОВНІЙ ЛІНІЇ
+// =====================================================================================
+function computeMyBloodline(myUid, people) {
+  const starts = Object.values(people).filter((p) => p.createdBy === myUid).map((p) => p.id);
+  const visited = new Set(starts);
+  const queue = [...starts];
+  while (queue.length) {
+    const id = queue.shift();
+    const p = people[id];
+    if (!p) continue;
+    (p.parentIds || []).forEach((pid) => { if (people[pid] && !visited.has(pid)) { visited.add(pid); queue.push(pid); } });
+    (p.childIds || []).forEach((cid) => { if (people[cid] && !visited.has(cid)) { visited.add(cid); queue.push(cid); } });
+  }
+  return visited;
+}
+
+function isSharedChild(person, myLine, otherUids, people) {
+  const parents = (person.parentIds || []).map((id) => people[id]).filter(Boolean);
+  const hasMyLineParent = parents.some((pp) => myLine.has(pp.id));
+  const hasOtherParent = parents.some((pp) => pp.createdBy && otherUids.includes(pp.createdBy) && !myLine.has(pp.id));
+  return hasMyLineParent && hasOtherParent;
+}
+
+export async function leaveFamilySpace(myUid, currentSpaceId) {
+  const [people, spaceSnap] = await Promise.all([
+    getPeopleOnce(currentSpaceId),
+    getDoc(doc(db, 'familySpaces', currentSpaceId)),
+  ]);
+  if (!spaceSnap.exists()) throw new Error('Простір не знайдено.');
+  const members = spaceSnap.data().members || [];
+  const otherUids = members.filter((m) => m !== myUid);
+  if (otherUids.length === 0) return;
+
+  const myLine = computeMyBloodline(myUid, people);
+  const sharedChildren = Object.values(people).filter((p) => !myLine.has(p.id) && isSharedChild(p, myLine, otherUids, people));
+
+  const newSpaceRef = await addDoc(collection(db, 'familySpaces'), {
+    members: [myUid], createdAt: serverTimestamp(),
   });
-  return links;
+  const newSpaceId = newSpaceRef.id;
+
+  const idMap = {};
+  const updates = [];
+
+  myLine.forEach((id) => {
+    idMap[id] = id;
+    updates.push(updateDoc(doc(db, 'people', id), { spaceId: newSpaceId }));
+  });
+
+  for (const child of sharedChildren) {
+    const newId = await addPerson(newSpaceId, {
+      ...child,
+      linkedTo: Array.from(new Map([...(child.linkedTo || []), { spaceId: currentSpaceId, personId: child.id }]
+        .map((l) => [l.spaceId + '_' + l.personId, l])).values()),
+    }, child.createdBy, child.createdByName);
+    idMap[child.id] = newId;
+    updates.push(updateDoc(doc(db, 'people', child.id), {
+      linkedTo: Array.from(new Map([...(child.linkedTo || []), { spaceId: newSpaceId, personId: newId }]
+        .map((l) => [l.spaceId + '_' + l.personId, l])).values()),
+    }));
+  }
+
+  await Promise.all(updates);
+
+  const remapUpdates = [];
+  const newSpacePeopleIds = new Set([...myLine, ...sharedChildren.map((c) => idMap[c.id])]);
+  for (const id of newSpacePeopleIds) {
+    const isCopy = sharedChildren.some((c) => idMap[c.id] === id);
+    const original = isCopy ? sharedChildren.find((c) => idMap[c.id] === id) : people[id];
+    if (!original) continue;
+    const remap = (ids) => (ids || []).map((rid) => idMap[rid]).filter((rid) => rid && newSpacePeopleIds.has(rid));
+    remapUpdates.push(updateDoc(doc(db, 'people', id), {
+      parentIds: remap(original.parentIds),
+      childIds: remap(original.childIds),
+      spouseIds: remap(original.spouseIds),
+    }));
+  }
+  await Promise.all(remapUpdates);
+
+  await updateDoc(doc(db, 'familySpaces', currentSpaceId), { members: arrayRemove(myUid) });
+}
+
+// =====================================================================================
+// ОНБОРДИНГ
+// =====================================================================================
+export async function saveOnboarding(spaceId, data, actingUid, actingName) {
+  const { me, father, mother, partner, children } = data;
+  const meId = await addPerson(spaceId, { ...me, isSelf: true }, actingUid, actingName);
+
+  let fatherId = null, motherId = null;
+  const parentIds = [];
+  if (father) { fatherId = await addPerson(spaceId, father, actingUid, actingName); parentIds.push(fatherId); }
+  if (mother) { motherId = await addPerson(spaceId, mother, actingUid, actingName); parentIds.push(motherId); }
+
+  let partnerId = null;
+  if (partner) partnerId = await addPerson(spaceId, partner, actingUid, actingName);
+
+  const childIds = [];
+  for (const ch of children || []) childIds.push(await addPerson(spaceId, ch, actingUid, actingName));
+
+  await updatePerson(meId, { parentIds, childIds, spouseIds: partnerId ? [partnerId] : [] });
+  for (const pid of parentIds) await updatePerson(pid, { childIds: [meId] });
+  if (partnerId) await updatePerson(partnerId, { spouseIds: [meId], childIds });
+  for (const cid of childIds) {
+    await updatePerson(cid, { parentIds: partnerId ? [meId, partnerId] : [meId] });
+  }
+
+  return { meId, fatherId, motherId, partnerId, childIds };
 }
 
 // ---- Пошук користувачів (за email) ----
@@ -513,59 +478,5 @@ export async function findUserByEmail(email) {
   const snap = await getDocs(q);
   let found = null;
   snap.forEach((d) => { found = d.data(); });
-  return found;
-}
-
-export async function getPublicUsers() {
-  const q = query(collection(db, 'users'), where('isPublic', '==', true));
-  const snap = await getDocs(q);
-  const list = [];
-  snap.forEach((d) => list.push(d.data()));
-  return list;
-}
-
-// Усі користувачі системи (включно з приватними) — використовується ЛИШЕ для фонового
-// автопошуку збігів. Сам факт приватності не приховує людину від алгоритму порівняння,
-// але приховує від людей повний доступ до чужого дерева (це окреме право, grants).
-export async function getAllUsersForScan() {
-  const snap = await getDocs(collection(db, 'users'));
-  const list = [];
-  snap.forEach((d) => list.push(d.data()));
-  return list;
-}
-
-// Дерева, доступні мені для об'єднаного перегляду: моє власне + ті, кому я дав/хто дав мені доступ.
-export async function getAccessibleTrees(uid) {
-  const own = await getPeopleOnce(uid);
-  const trees = [{ ownerId: uid, people: own }];
-
-  const grantsToMe = await getDocs(query(collection(db, 'grants'), where('granteeUid', '==', uid)));
-  const ownerIds = new Set();
-  grantsToMe.forEach((d) => ownerIds.add(d.data().ownerId));
-
-  for (const ownerId of ownerIds) {
-    const theirs = await getPeopleOnce(ownerId);
-    trees.push({ ownerId, people: theirs });
-  }
-  return trees;
-}
-
-// Чи вже існує (pending/accepted) пропозиція між цими двома конкретними персонами —
-// щоб автоскан не спамив однаковими пропозиціями повторно.
-export async function proposalExists(minePersonId, theirPersonId) {
-  const q1 = query(
-    collection(db, 'mergeProposals'),
-    where('minePersonId', '==', minePersonId),
-    where('theirPersonId', '==', theirPersonId),
-  );
-  const q2 = query(
-    collection(db, 'mergeProposals'),
-    where('minePersonId', '==', theirPersonId),
-    where('theirPersonId', '==', minePersonId),
-  );
-  const [s1, s2] = await Promise.all([getDocs(q1), getDocs(q2)]);
-  let found = false;
-  s1.forEach((d) => { if (d.data().status !== 'rejected') found = true; });
-  s2.forEach((d) => { if (d.data().status !== 'rejected') found = true; });
   return found;
 }
