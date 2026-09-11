@@ -11,7 +11,7 @@ import PersonQuickMenu from '../components/PersonQuickMenu.jsx';
 // - рівень (generation) — я = 0, батьки = -1, діти = +1.
 
 const CARD_W = 220, CARD_H_SINGLE = 74, CARD_H_COUPLE = 116;
-const GAP_X = 28, FAMILY_GAP = 56, GAP_Y = 110, SLOT_W = 140;
+const GAP_X = 28, FAMILY_GAP = 120, GAP_Y = 110, SLOT_W = 140;
 
 function assignGenerations(people, focusPersonId) {
   const gen = {};
@@ -325,13 +325,29 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
   const onUp = () => { drag.current = null; };
 
   const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const midpoint = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+
+  // Зум "у точку" (курсор миші або центр pinch-жесту): точка під курсором лишається
+  // на місці після зміни масштабу, замість того щоб дерево "втікало" з-під пальців.
+  const zoomToPoint = (screenX, screenY, newZoom) => {
+    if (!containerRef.current) { setZoom(newZoom); return; }
+    const rect = containerRef.current.getBoundingClientRect();
+    const px = screenX - rect.left, py = screenY - rect.top;
+    setZoom((prevZoom) => {
+      setPan((prevPan) => ({
+        x: px - ((px - prevPan.x) / prevZoom) * newZoom,
+        y: py - ((py - prevPan.y) / prevZoom) * newZoom,
+      }));
+      return newZoom;
+    });
+  };
 
   const onTouchStart = (e) => {
     if (e.touches.length === 1) {
       drag.current = { x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y };
     } else if (e.touches.length === 2) {
       drag.current = null;
-      pinch.current = { d: dist(e.touches), zoom };
+      pinch.current = { d: dist(e.touches), zoom, mid: midpoint(e.touches) };
     }
   };
   const onTouchMove = (e) => {
@@ -341,7 +357,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
     } else if (e.touches.length === 2 && pinch.current) {
       const d = dist(e.touches);
       const nz = Math.min(2, Math.max(0.15, pinch.current.zoom * (d / pinch.current.d)));
-      setZoom(nz);
+      zoomToPoint(pinch.current.mid.x, pinch.current.mid.y, nz);
       e.preventDefault();
     }
   };
@@ -350,7 +366,8 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
   const onWheel = (e) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.08 : 0.08;
-    setZoom((z) => Math.min(2, Math.max(0.15, z + delta)));
+    const nz = Math.min(2, Math.max(0.15, zoom + delta));
+    zoomToPoint(e.clientX, e.clientY, nz);
   };
 
   const openMenu = (e, p) => {
@@ -410,8 +427,16 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
         {onAddPerson && (
           <button className="btn btn-sm" onClick={onAddPerson}>+ Людина</button>
         )}
-        <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.min(2, z + 0.15))}>+</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.max(0.15, z - 0.15))}>−</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => {
+          if (!containerRef.current) return;
+          const rect = containerRef.current.getBoundingClientRect();
+          zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, Math.min(2, zoom + 0.15));
+        }}>+</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => {
+          if (!containerRef.current) return;
+          const rect = containerRef.current.getBoundingClientRect();
+          zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, Math.max(0.15, zoom - 0.15));
+        }}>−</button>
         <button className="btn btn-ghost btn-sm" onClick={() => {
           if (containerRef.current) {
             const rect = containerRef.current.getBoundingClientRect();
