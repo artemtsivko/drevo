@@ -228,6 +228,12 @@ label {
   z-index: 50; padding: 16px;
   overscroll-behavior: contain;
 }
+/* Майстер онбордингу: на десктопі трохи зсунутий угору, щоб не займати весь екран
+   для короткого контенту. На мобільному (нижче) це правило перекривається — модалка
+   все одно розтягується на весь екран, як звичайна .modal. */
+@media (min-width: 641px) {
+  .onboarding-backdrop { align-items: flex-start; padding-top: 40px; }
+}
 .modal {
   background: var(--paper-2);
   border-radius: var(--radius);
