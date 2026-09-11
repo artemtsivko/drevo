@@ -6,6 +6,7 @@ const RELATION_LABEL = {
   mother: 'матір',
   partner: 'партнера',
   child: 'дитину',
+  sibling: 'брата/сестру',
 };
 
 // Контекстна менюшка при кліку на картці людини.
@@ -15,12 +16,13 @@ export default function PersonQuickMenu({
   onEdit, onAddNew, onLinkExisting, onClose,
   hasFather, hasMother, hasPartner,
 }) {
-  const [relationMode, setRelationMode] = useState(null); // 'father' | 'mother' | 'partner' | 'child' | null
+  const [relationMode, setRelationMode] = useState(null); // 'father' | 'mother' | 'partner' | 'child' | 'sibling' | null
   const [pickMode, setPickMode] = useState(false); // показуємо пошук наявної людини
 
   const startRelation = (rel) => { setRelationMode(rel); setPickMode(false); };
 
   const excludeId = person.id;
+  const hasAnyParent = hasFather || hasMother;
 
   return (
     <div className="quick-menu-backdrop" onClick={onClose}>
@@ -33,6 +35,7 @@ export default function PersonQuickMenu({
             {!hasMother && <button onClick={() => startRelation('mother')}>👩 Додати матір</button>}
             {!hasPartner && <button onClick={() => startRelation('partner')}>💍 Додати партнера</button>}
             <button onClick={() => startRelation('child')}>👶 Додати дитину</button>
+            {hasAnyParent && <button onClick={() => startRelation('sibling')}>👫 Додати брата/сестру</button>}
           </>
         )}
 

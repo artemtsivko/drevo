@@ -455,3 +455,16 @@ label {
 @media (max-width: 640px) {
   .tree-canvas { height: 65vh; }
 }
+
+/* Дерево на весь екран браузера (десктоп) */
+.tree-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #fbfaf5;
+  border-radius: 0;
+}
+.tree-fullscreen .tree-canvas {
+  height: 100vh;
+  height: 100dvh;
+}

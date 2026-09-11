@@ -30,8 +30,11 @@ export default function PlaceInput({ value, onChange, placeholder }) {
         const data = await res.json();
         setOptions(data.map((d) => ({
           label: d.display_name,
-          value: [d.address?.city || d.address?.town || d.address?.village || d.address?.hamlet || d.name,
-            d.address?.country].filter(Boolean).join(', '),
+          value: [
+            d.address?.city || d.address?.town || d.address?.village || d.address?.hamlet || d.name,
+            d.address?.state || d.address?.region,
+            d.address?.country,
+          ].filter(Boolean).join(', '),
         })));
       } catch {
         setOptions([]);

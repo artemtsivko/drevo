@@ -47,6 +47,8 @@ export default function App() {
   const [people, setPeople] = useState({});
   const [tab, setTab] = useState('tree');
   const [view, setView] = useState('tree');
+  const [treeFullscreen, setTreeFullscreen] = useState(false);
+  const [matchableIds, setMatchableIds] = useState(new Set());
   const [editing, setEditing] = useState(null);
   const [prefill, setPrefill] = useState(null);
   const [showModal, setShowModal] = useState(false);
@@ -111,7 +113,9 @@ export default function App() {
   // Автоматичний фоновий пошук збігів: при вході і кожні 5 хвилин.
   useEffect(() => {
     if (!user || !profile || !space || !peopleLoaded) return;
-    const scan = () => runAutoScan(user.uid, profile, space.id, people).catch((e) => console.warn('autoScan:', e.message));
+    const scan = () => runAutoScan(user.uid, profile, space.id, people)
+      .then((r) => setMatchableIds(r.matchableIds || new Set()))
+      .catch((e) => console.warn('autoScan:', e.message));
     scan();
     const interval = setInterval(scan, 5 * 60 * 1000);
     return () => clearInterval(interval);
@@ -153,10 +157,14 @@ export default function App() {
     } else if (relation === 'mother') {
       setPrefill({ gender: 'f', childIds: [person.id] });
     } else if (relation === 'partner') {
-      setPrefill({ spouseIds: [person.id] });
+      const opposite = person.gender === 'm' ? 'f' : person.gender === 'f' ? 'm' : '';
+      setPrefill({ spouseIds: [person.id], gender: opposite });
     } else if (relation === 'child') {
       const spouse = (person.spouseIds || [])[0];
       setPrefill({ parentIds: spouse ? [person.id, spouse] : [person.id] });
+    } else if (relation === 'sibling') {
+      // Брат/сестра приєднується до ТИХ САМИХ батьків, що вже є в person
+      setPrefill({ parentIds: [...(person.parentIds || [])] });
     }
     setShowModal(true);
   };
@@ -165,6 +173,14 @@ export default function App() {
     const fresh = people;
     if (relation === 'father' || relation === 'mother') {
       await linkParentChild(existingId, person.id, fresh);
+      const otherParentId = (person.parentIds || []).find((pid) => pid !== existingId);
+      if (otherParentId) {
+        const newParent = fresh[existingId], other = fresh[otherParentId];
+        if (newParent && other && !(other.spouseIds || []).includes(existingId)) {
+          await updatePerson(otherParentId, { spouseIds: Array.from(new Set([...(other.spouseIds || []), existingId])) });
+          await updatePerson(existingId, { spouseIds: Array.from(new Set([...(newParent.spouseIds || []), otherParentId])) });
+        }
+      }
     } else if (relation === 'partner') {
       const a = fresh[person.id], b = fresh[existingId];
       await updatePerson(person.id, { spouseIds: Array.from(new Set([...(a.spouseIds || []), existingId])) });
@@ -173,6 +189,10 @@ export default function App() {
       const spouse = (person.spouseIds || [])[0];
       await linkParentChild(person.id, existingId, fresh);
       if (spouse) await linkParentChild(spouse, existingId, fresh);
+    } else if (relation === 'sibling') {
+      for (const pid of person.parentIds || []) {
+        await linkParentChild(pid, existingId, fresh);
+      }
     }
   };
 
@@ -186,7 +206,22 @@ export default function App() {
       const newId = await addPerson(space.id, form, user.uid, profile.displayName);
       const fresh = { ...people, [newId]: { ...form, id: newId } };
       for (const pid of form.parentIds || []) await linkParentChild(pid, newId, fresh);
-      for (const cid of form.childIds || []) await linkParentChild(newId, cid, fresh);
+      for (const cid of form.childIds || []) {
+        await linkParentChild(newId, cid, fresh);
+        // Якщо цю людину додали як батька/матір комусь, хто вже має ІНШОГО батька/матір —
+        // автоматично робимо їх партнерами одне одного (типовий сценарій "додаю тата, а мама вже є").
+        const child = people[cid];
+        if (child) {
+          const otherParentId = (child.parentIds || []).find((pid) => pid !== newId);
+          if (otherParentId) {
+            const other = people[otherParentId];
+            if (other && !(other.spouseIds || []).includes(newId)) {
+              await updatePerson(otherParentId, { spouseIds: Array.from(new Set([...(other.spouseIds || []), newId])) });
+              await updatePerson(newId, { spouseIds: Array.from(new Set([...(form.spouseIds || []), otherParentId])) });
+            }
+          }
+        }
+      }
       for (const sid of form.spouseIds || []) {
         const other = people[sid];
         if (other) {
@@ -247,7 +282,16 @@ export default function App() {
               <span className="person-meta">{Object.keys(people).length} родичів</span>
             </div>
 
-            {view === 'tree' && <TreeView people={people} sharedIds={sharedIds} onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting} onAddPerson={openNew} mode="tree" />}
+            {view === 'tree' && (
+              <TreeView
+                people={people} sharedIds={sharedIds} matchableIds={matchableIds}
+                onOpen={openPerson} onAddNew={addNewRelated} onLinkExisting={linkExisting}
+                onAddPerson={openNew}
+                onMatchPerson={() => setTab('matches')}
+                fullscreen={treeFullscreen}
+                onToggleFullscreen={() => setTreeFullscreen((f) => !f)}
+              />
+            )}
             {view === 'list' && <ListView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
             {view === 'explorer' && <ExplorerView people={people} sharedIds={sharedIds} onOpen={openPerson} />}
           </div>

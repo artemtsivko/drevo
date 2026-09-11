@@ -7,7 +7,7 @@ import PersonPicker from './PersonPicker.jsx';
 const blank = {
   firstName: '', lastName: '', maidenName: '', gender: '',
   birthDate: '', birthYear: '', birthPlace: '',
-  deathDate: '', deathPlace: '', bio: '',
+  isDeceased: false, deathDate: '', deathYear: '', deathPlace: '', bio: '',
   parentIds: [], childIds: [], spouseIds: [],
 };
 
@@ -112,19 +112,39 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
               : <PlaceInput value={form.birthPlace} onChange={(v) => set('birthPlace', v)} placeholder="Почніть вводити місто чи село…" />}
           </div>
 
-          <div className="grid-2">
-            <div>
-              <label>Дата смерті</label>
-              <input type="date" value={form.deathDate} disabled={readOnly}
-                onChange={(e) => set('deathDate', e.target.value)} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, cursor: readOnly ? 'default' : 'pointer' }}>
+            <input
+              type="checkbox"
+              style={{ width: 'auto' }}
+              checked={!!form.isDeceased}
+              disabled={readOnly}
+              onChange={(e) => set('isDeceased', e.target.checked)}
+            />
+            Померлий(-ла)
+          </label>
+
+          {form.isDeceased && (
+            <div className="grid-2">
+              <div>
+                <label>Дата смерті</label>
+                <input type="date" value={form.deathDate} disabled={readOnly}
+                  onChange={(e) => set('deathDate', e.target.value)} />
+              </div>
+              <div>
+                <label>Рік смерті (якщо дата невідома)</label>
+                <input type="number" placeholder="напр. 2010" value={form.deathYear} disabled={readOnly}
+                  onChange={(e) => set('deathYear', e.target.value)} />
+              </div>
             </div>
+          )}
+          {form.isDeceased && (
             <div>
               <label>Місце смерті</label>
               {readOnly
                 ? <div>{form.deathPlace || '—'}</div>
                 : <PlaceInput value={form.deathPlace} onChange={(v) => set('deathPlace', v)} placeholder="Місто чи село…" />}
             </div>
-          </div>
+          )}
 
           <div>
             <label>Нотатки / біографія</label>
