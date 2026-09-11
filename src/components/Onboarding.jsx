@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import GenderPicker from './GenderPicker.jsx';
 import PlaceInput from './PlaceInput.jsx';
 
@@ -74,7 +75,7 @@ export default function Onboarding({ profile, onFinish, onSkip }) {
 
   const canNext = step === 0 ? me.firstName.trim() : true;
 
-  return (
+  return createPortal(
     <div className="modal-backdrop onboarding-backdrop">
       <div className="modal" style={{ maxWidth: 560 }}>
         <div className="modal-head">
@@ -149,6 +150,7 @@ export default function Onboarding({ profile, onFinish, onSkip }) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

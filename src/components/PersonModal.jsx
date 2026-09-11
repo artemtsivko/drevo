@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import GenderPicker from './GenderPicker.jsx';
 import PlaceInput from './PlaceInput.jsx';
 import PersonPicker from './PersonPicker.jsx';
@@ -49,7 +50,7 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
   );
   const showRelationPickers = !readOnly && !isQuickAdd;
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
@@ -164,6 +165,7 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -131,21 +131,11 @@ export default function App() {
 
   if (showOnboarding) {
     return (
-      <div>
-        <header className="app-header">
-          <div className="brand">🌳 Drevo</div>
-          <div className="header-spacer" />
-          <div className="user-chip">
-            {profile.photoURL && <img src={profile.photoURL} alt="" />}
-            <span>{profile.displayName}</span>
-          </div>
-        </header>
-        <Onboarding
-          profile={profile}
-          onFinish={finishOnboarding}
-          onSkip={() => setSkipOnboarding(true)}
-        />
-      </div>
+      <Onboarding
+        profile={profile}
+        onFinish={finishOnboarding}
+        onSkip={() => setSkipOnboarding(true)}
+      />
     );
   }
 
