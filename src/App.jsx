@@ -85,12 +85,28 @@ export default function App() {
   // Показуємо майстер, коли дерево порожнє і користувач його не пропустив
   const showOnboarding = peopleLoaded && Object.keys(people).length === 0 && !skipOnboarding;
 
-  // Блокуємо скрол фонової сторінки, коли відкрита модалка
+  // Блокуємо скрол фонової сторінки, коли відкрита модалка.
+  // На iOS Safari саме тільки overflow:hidden на body не завжди блокує скрол і може
+  // спотворювати розрахунок доступної висоти під модалкою — тому фіксуємо body повністю.
   useEffect(() => {
     const modalOpen = showModal || showOnboarding;
-    document.body.style.overflow = modalOpen ? 'hidden' : '';
-    return () => { document.body.style.overflow = ''; };
-  });
+    if (modalOpen) {
+      const scrollY = window.scrollY;
+      document.body.style.position = 'fixed';
+      document.body.style.top = `-${scrollY}px`;
+      document.body.style.left = '0';
+      document.body.style.right = '0';
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.left = '';
+        document.body.style.right = '';
+        document.body.style.overflow = '';
+        window.scrollTo(0, scrollY);
+      };
+    }
+  }, [showModal, showOnboarding]);
 
   // Автоматичний фоновий пошук збігів: при вході і кожні 5 хвилин.
   useEffect(() => {
