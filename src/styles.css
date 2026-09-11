@@ -444,16 +444,19 @@ label {
 }
 .quick-menu button:hover { background: var(--moss-light); }
 
-/* --- Tree canvas: touch-friendly, fills width, no clipping --- */
+/* --- Tree canvas: підлаштовується під висоту вікна браузера (шапка + таби + панель
+   інструментів + відступи ≈ 260px десктоп, менше на мобільному) --- */
 .tree-canvas {
-  height: 580px;
+  height: calc(100vh - 260px);
+  height: calc(100dvh - 260px);
+  min-height: 420px;
   width: 100%;
   overflow: hidden;
   background: #fbfaf5;
   touch-action: none;
 }
 @media (max-width: 640px) {
-  .tree-canvas { height: 65vh; }
+  .tree-canvas { height: calc(100dvh - 220px); min-height: 360px; }
 }
 
 /* Дерево на весь екран браузера (десктоп) */
@@ -467,4 +470,5 @@ label {
 .tree-fullscreen .tree-canvas {
   height: 100vh;
   height: 100dvh;
+  min-height: unset;
 }

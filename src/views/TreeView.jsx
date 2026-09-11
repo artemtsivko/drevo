@@ -13,12 +13,13 @@ import PersonQuickMenu from '../components/PersonQuickMenu.jsx';
 const CARD_W = 220, CARD_H_SINGLE = 74, CARD_H_COUPLE = 116;
 const GAP_X = 28, FAMILY_GAP = 56, GAP_Y = 110, SLOT_W = 140;
 
-function assignGenerations(people) {
+function assignGenerations(people, focusPersonId) {
   const gen = {};
   const ids = Object.keys(people);
   if (ids.length === 0) return gen;
 
-  let start = ids.find((id) => people[id].isSelf);
+  let start = focusPersonId && people[focusPersonId] ? focusPersonId : null;
+  if (!start) start = ids.find((id) => people[id].isSelf);
   if (!start) start = ids.find((id) => !(people[id].parentIds || []).some((p) => people[p]));
   if (!start) start = ids[0];
 
@@ -84,9 +85,48 @@ function unitChildren(unit, people, personToUnit) {
 // Рекурсивна розкладка: для кожного юніту рахуємо позицію x (центр) на основі
 // позицій його дітей (якщо є) — це і гарантує, що брати/сестри йдуть поспіль,
 // а батьки центруються над своєю групою дітей, а не над усім рядком покоління.
-function layout(people) {
-  const gen = assignGenerations(people);
-  const { units, personToUnit } = buildUnitsIndex(people, gen);
+// Якщо задано focusPersonId — повертає підмножину people: сама людина, її ПРЯМІ
+// предки (батьки, дідусі-бабусі...), її ПРЯМІ нащадки (діти, онуки...), і партнери
+// кожного з них (щоб пари не розпадались навпіл) — без бічних гілок (братів/сестер,
+// дядьків/тіток), як у режимі "показати цю гілку".
+function filterToBranch(people, focusPersonId) {
+  if (!focusPersonId || !people[focusPersonId]) return people;
+  const keep = new Set([focusPersonId]);
+
+  // Предки: йдемо вгору по parentIds
+  let frontier = [focusPersonId];
+  while (frontier.length) {
+    const next = [];
+    frontier.forEach((id) => {
+      (people[id].parentIds || []).forEach((pid) => { if (people[pid] && !keep.has(pid)) { keep.add(pid); next.push(pid); } });
+    });
+    frontier = next;
+  }
+
+  // Нащадки: йдемо вниз по childIds
+  frontier = [focusPersonId];
+  while (frontier.length) {
+    const next = [];
+    frontier.forEach((id) => {
+      (people[id].childIds || []).forEach((cid) => { if (people[cid] && !keep.has(cid)) { keep.add(cid); next.push(cid); } });
+    });
+    frontier = next;
+  }
+
+  // Партнери кожного вже включеного — щоб пари лишались цілими картками
+  Array.from(keep).forEach((id) => {
+    (people[id].spouseIds || []).forEach((sid) => { if (people[sid]) keep.add(sid); });
+  });
+
+  const filtered = {};
+  keep.forEach((id) => { filtered[id] = people[id]; });
+  return filtered;
+}
+
+function layout(people, focusPersonId) {
+  const scoped = filterToBranch(people, focusPersonId);
+  const gen = assignGenerations(scoped, focusPersonId);
+  const { units, personToUnit } = buildUnitsIndex(scoped, gen);
 
   const allUnits = Object.values(units);
   const gens = Array.from(new Set(allUnits.map((u) => u.gen))).sort((a, b) => a - b);
@@ -95,7 +135,7 @@ function layout(people) {
   // Корені кожного покоління (юніти БЕЗ батьківського юніту серед видимих)
   const hasParentUnit = new Set();
   allUnits.forEach((u) => {
-    const kids = unitChildren(u, people, personToUnit);
+    const kids = unitChildren(u, scoped, personToUnit);
     kids.forEach((k) => hasParentUnit.add(k));
   });
 
@@ -108,12 +148,12 @@ function layout(people) {
     if (visited.has(u.id)) return [unitX[u.id] - CARD_W / 2, unitX[u.id] + CARD_W / 2];
     visited.add(u.id);
 
-    const kids = unitChildren(u, people, personToUnit)
+    const kids = unitChildren(u, scoped, personToUnit)
       .map((id) => units[id])
       .filter(Boolean)
       .sort((a, b) => {
         // Сортуємо дітей за датою народження (старші ліворуч), якщо відома
-        const pa = people[a.members[0]], pb = people[b.members[0]];
+        const pa = scoped[a.members[0]], pb = scoped[b.members[0]];
         const ya = pa.birthDate || pa.birthYear || '9999';
         const yb = pb.birthDate || pb.birthYear || '9999';
         return String(ya).localeCompare(String(yb));
@@ -186,7 +226,7 @@ function layout(people) {
   const width = (maxX - minX) + offsetX + SLOT_W + 40;
   const height = 30 + (gens.length ? (gens[gens.length - 1] - minGen + 1) : 1) * (Math.max(CARD_H_COUPLE, CARD_H_SINGLE) + GAP_Y) + 60;
 
-  return { unitPos, memberUnit, width, height, gen, minGen };
+  return { unitPos, memberUnit, width, height, gen, minGen, scoped };
 }
 
 function born(p) {
@@ -231,8 +271,9 @@ function border(p) {
 }
 
 export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAddNew, onLinkExisting, onAddPerson, onAddChildDirect, onMatchPerson, fullscreen, onToggleFullscreen }) {
-  const { unitPos, memberUnit, width, height, gen, minGen } = useMemo(() => layout(people), [people]);
-  const [zoom, setZoom] = useState(0.85);
+  const [focusPersonId, setFocusPersonId] = useState(null);
+  const { unitPos, memberUnit, width, height, gen, minGen, scoped: displayPeople } = useMemo(() => layout(people, focusPersonId), [people, focusPersonId]);
+  const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const drag = useRef(null);
   const pinch = useRef(null);
@@ -303,7 +344,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
     if (drawnUnits.has(unit.id)) return;
     drawnUnits.add(unit.id);
     const kidSet = new Set();
-    unit.members.forEach((m) => (people[m].childIds || []).forEach((c) => { if (people[c] && memberUnit[c]) kidSet.add(c); }));
+    unit.members.forEach((m) => (displayPeople[m].childIds || []).forEach((c) => { if (displayPeople[c] && memberUnit[c]) kidSet.add(c); }));
     if (kidSet.size === 0) return;
     const sx = x + w / 2, sy = y + h;
     const doneChildUnits = new Set();
@@ -319,7 +360,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
   // Слоти "+ додати батьків" для коренів (людей без батьків на найвищому видимому рівні)
   const slots = [];
   Object.values(unitPos).forEach(({ unit, x, y, w, h }) => {
-    const anyHasParents = unit.members.some((m) => (people[m].parentIds || []).some((pid) => people[pid]));
+    const anyHasParents = unit.members.some((m) => (displayPeople[m].parentIds || []).some((pid) => displayPeople[pid]));
     if (!anyHasParents && gen[unit.members[0]] === minGen) {
       slots.push({ x: x + w / 2, y: y - GAP_Y + 20, personId: unit.members[0] });
     }
@@ -327,13 +368,18 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
 
   return (
     <div className={fullscreen ? 'tree-fullscreen' : 'card'} style={{ padding: 0, overflow: 'hidden', position: 'relative' }} ref={containerRef}>
+      <div className="row" style={{ position: 'absolute', top: 10, left: 10, zIndex: 5, gap: 6 }}>
+        {focusPersonId && (
+          <button className="btn btn-sm" onClick={() => setFocusPersonId(null)}>← Усе дерево</button>
+        )}
+      </div>
       <div className="row" style={{ position: 'absolute', top: 10, right: 10, zIndex: 5, gap: 6 }}>
         {onAddPerson && (
           <button className="btn btn-sm" onClick={onAddPerson}>+ Людина</button>
         )}
         <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.min(2, z + 0.15))}>+</button>
         <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => Math.max(0.3, z - 0.15))}>−</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => { setZoom(0.85); setPan({ x: 0, y: 0 }); }}>⟳</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>⟳</button>
         {onToggleFullscreen && (
           <button className="btn btn-ghost btn-sm" onClick={onToggleFullscreen} title={fullscreen ? 'Згорнути' : 'На весь екран'}>
             {fullscreen ? '⤡' : '⤢'}
@@ -347,7 +393,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
         onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
         onWheel={onWheel}
       >
-        <svg width="100%" height="100%" style={{ display: 'block', cursor: drag.current ? 'grabbing' : 'grab' }}>
+        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMin meet" style={{ display: 'block', cursor: drag.current ? 'grabbing' : 'grab' }}>
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {childEdges.map((e, i) => {
               const my = (e.sy + e.cy) / 2;
@@ -361,7 +407,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
             {slots.map((s, i) => (
               <g key={'slot' + i} transform={`translate(${s.x - SLOT_W / 2},${s.y - 34})`}
                 style={{ cursor: 'pointer' }}
-                onClick={() => onAddNew('father', people[s.personId])}>
+                onClick={() => onAddNew('father', displayPeople[s.personId])}>
                 <rect width={SLOT_W} height="34" rx="8" fill="none" stroke="#c7bfa8" strokeWidth="1.5" strokeDasharray="5 4" />
                 <text x={SLOT_W / 2} y="21" textAnchor="middle" fontFamily="Segoe UI, sans-serif" fontSize="12" fill="#9a8f78">
                   + додати батьків
@@ -375,7 +421,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
                 <g key={uid} transform={`translate(${x},${y})`}>
                   <rect width={w} height={h} rx="12" fill="#fffdf8" stroke="#d9d2c4" strokeWidth="1" />
                   {unit.members.map((mid, i) => {
-                    const p = people[mid];
+                    const p = displayPeople[mid];
                     const shared = sharedIds && sharedIds.has(p.id);
                     const matchable = matchableIds && matchableIds.has(p.id);
                     const rowH = isCouple ? h / 2 : h;
@@ -422,7 +468,7 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
                   {isCouple && <line x1="0" y1={h / 2} x2={w} y2={h / 2} stroke="#d9d2c4" strokeWidth="1" />}
                   {/* Кнопка "+" знизу картки-юніту — додати дитину */}
                   <g transform={`translate(${w / 2},${h})`} style={{ cursor: 'pointer' }}
-                    onClick={() => onAddNew('child', people[unit.members[0]])}>
+                    onClick={() => onAddNew('child', displayPeople[unit.members[0]])}>
                     <circle cy="14" r="11" fill="#fffdf8" stroke="#9db3a2" strokeWidth="1.5" />
                     <text y="18.5" textAnchor="middle" fontSize="15" fill="#3f6b4c">+</text>
                   </g>
@@ -436,12 +482,13 @@ export default function TreeView({ people, sharedIds, matchableIds, onOpen, onAd
       {menu && (
         <PersonQuickMenu
           x={menu.x} y={menu.y} person={menu.person} people={people}
-          hasFather={(menu.person.parentIds || []).some((id) => people[id] && people[id].gender !== 'f')}
-          hasMother={(menu.person.parentIds || []).some((id) => people[id] && people[id].gender === 'f')}
-          hasPartner={(menu.person.spouseIds || []).some((id) => people[id])}
+          hasFather={(menu.person.parentIds || []).some((id) => displayPeople[id] && displayPeople[id].gender !== 'f')}
+          hasMother={(menu.person.parentIds || []).some((id) => displayPeople[id] && displayPeople[id].gender === 'f')}
+          hasPartner={(menu.person.spouseIds || []).some((id) => displayPeople[id])}
           onEdit={() => act(onOpen)}
           onAddNew={(relation) => act(onAddNew, relation)}
           onLinkExisting={(relation, existingId) => act(onLinkExisting, relation, existingId)}
+          onFocusBranch={() => { setFocusPersonId(menu.person.id); setMenu(null); }}
           onClose={() => setMenu(null)}
         />
       )}

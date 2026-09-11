@@ -13,7 +13,7 @@ const RELATION_LABEL = {
 // Для дій "додати X" спершу пропонує вибір: нова людина чи вже наявна в дереві.
 export default function PersonQuickMenu({
   x, y, person, people,
-  onEdit, onAddNew, onLinkExisting, onClose,
+  onEdit, onAddNew, onLinkExisting, onFocusBranch, onClose,
   hasFather, hasMother, hasPartner,
 }) {
   const [relationMode, setRelationMode] = useState(null); // 'father' | 'mother' | 'partner' | 'child' | 'sibling' | null
@@ -31,6 +31,7 @@ export default function PersonQuickMenu({
           <>
             <div className="quick-menu-title">{person.firstName} {person.lastName}</div>
             <button onClick={onEdit}>✏️ Редагувати</button>
+            {onFocusBranch && <button onClick={onFocusBranch}>🌳 Показати цю гілку</button>}
             {!hasFather && <button onClick={() => startRelation('father')}>👨 Додати батька</button>}
             {!hasMother && <button onClick={() => startRelation('mother')}>👩 Додати матір</button>}
             {!hasPartner && <button onClick={() => startRelation('partner')}>💍 Додати партнера</button>}
