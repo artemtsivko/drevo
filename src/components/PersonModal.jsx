@@ -38,6 +38,17 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
   const lastEditedByName = person && person.lastEditedByName;
   const editedByDifferent = createdByName && lastEditedByName && lastEditedByName !== createdByName;
 
+  // Якщо форма відкрита через швидке додавання (квік-меню "Додати батька/матір/партнера/дитину"),
+  // звʼязок вже заданий тим, звідки її відкрили (childIds/parentIds/spouseIds у префілі) —
+  // не показуємо додаткові поля вибору батьків/партнера для щойно створюваної людини,
+  // це і зайве, і подовжує форму без потреби.
+  const isQuickAdd = !form.id && (
+    (form.childIds && form.childIds.length > 0) ||
+    (form.parentIds && form.parentIds.length > 0) ||
+    (form.spouseIds && form.spouseIds.length > 0)
+  );
+  const showRelationPickers = !readOnly && !isQuickAdd;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -120,7 +131,7 @@ export default function PersonModal({ person, people, onSave, onClose, onDelete,
               onChange={(e) => set('bio', e.target.value)} />
           </div>
 
-          {!readOnly && (
+          {showRelationPickers && (
             <>
               <div>
                 <label>👨 Батько</label>
