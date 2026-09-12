@@ -133,12 +133,28 @@ export default function App() {
     // об'єднання — користувач побачить її у вкладці "Спільні родичі" з підтвердженням.
   };
 
+  // Якщо користувач пропускає майстер, а дерево ще порожнє — все одно створюємо
+  // картку "Я" (з іменем з Google-профілю), щоб було від кого будувати решту родоводу.
+  // Без цього дерево лишалось би повністю порожнім і незрозуміло, з чого починати.
+  const skipOnboardingWithSelf = async () => {
+    if (Object.keys(people).length === 0) {
+      const [firstName, ...rest] = (profile.displayName || 'Я').split(' ');
+      await addPerson(
+        space.id,
+        { firstName, lastName: rest.join(' '), isSelf: true },
+        user.uid,
+        profile.displayName
+      );
+    }
+    setSkipOnboarding(true);
+  };
+
   if (showOnboarding) {
     return (
       <Onboarding
         profile={profile}
         onFinish={finishOnboarding}
-        onSkip={() => setSkipOnboarding(true)}
+        onSkip={skipOnboardingWithSelf}
       />
     );
   }
